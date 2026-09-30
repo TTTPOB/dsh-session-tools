@@ -40,9 +40,12 @@ try {
   const web = data.find(item => item.path === webManifest).json
   const oldPatch = read(patch)
   if (!oldPatch.endsWith('\n')) fail('Home patch must end with a newline')
-  if (/^\s*- id: session-tools\s*$/m.test(oldPatch) || /^\s*name: dsh-session-tools\s*$/m.test(oldPatch)) fail('Plugin already declared in home patch; no changes made')
-  if (!web.dsh?.profile?.bundles?.includes('dsh-session-search-pro')) fail('Old Web bundle missing; inspect config before retrying')
-  if (!web.dependencies?.['dsh-session-search-pro']) fail('Old Web dependency missing; inspect config before retrying')
+  const newRowPresent = /^\s*- id: session-tools\s*$/m.test(oldPatch) || /^\s*name: dsh-session-tools\s*$/m.test(oldPatch)
+  const oldBundlePresent = web.dsh?.profile?.bundles?.includes('dsh-session-search-pro')
+  if (newRowPresent && oldBundlePresent) fail('New global plugin and old Web bundle are both declared; inspect config before retrying')
+  if (newRowPresent && !checkOnly) fail('Plugin already declared in home patch; no changes made')
+  if (!newRowPresent && !oldBundlePresent) fail('Old Web bundle missing; inspect config before retrying')
+  if (oldBundlePresent && !web.dependencies?.['dsh-session-search-pro']) fail('Old Web dependency missing; inspect config before retrying')
   for (const { path, json } of data) {
     const profile = dirname(path)
     const deps = json.dependencies || {}

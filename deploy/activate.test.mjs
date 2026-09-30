@@ -73,6 +73,67 @@ test('activation succeeds only after profile preflight', () => {
   } finally { rmSync(f.root, { recursive: true, force: true }) }
 })
 
+test('activated check-only preserves patch and manifest', () => {
+  const f = fixture()
+  try {
+    assert.equal(run(f).status, 0)
+    const patch = join(f.home, 'cordis.patch.yml')
+    const manifest = join(f.home, 'profiles/web/package.json')
+    const beforePatch = readFileSync(patch, 'utf8')
+    const beforeManifest = readFileSync(manifest, 'utf8')
+    const result = run(f, undefined, true)
+    assert.equal(result.status, 0, result.stderr)
+    assert.equal(readFileSync(patch, 'utf8'), beforePatch)
+    assert.equal(readFileSync(manifest, 'utf8'), beforeManifest)
+  } finally { rmSync(f.root, { recursive: true, force: true }) }
+})
+
+test('activated check-only accepts removed old dependency', () => {
+  const f = fixture()
+  try {
+    assert.equal(run(f).status, 0)
+    const manifest = join(f.home, 'profiles/web/package.json')
+    const web = JSON.parse(readFileSync(manifest, 'utf8'))
+    delete web.dependencies['dsh-session-search-pro']
+    put(manifest, JSON.stringify(web))
+    const before = readFileSync(manifest, 'utf8')
+    const result = run(f, undefined, true)
+    assert.equal(result.status, 0, result.stderr)
+    assert.equal(readFileSync(manifest, 'utf8'), before)
+  } finally { rmSync(f.root, { recursive: true, force: true }) }
+})
+
+test('new global row conflicts with old Web bundle', () => {
+  const f = fixture()
+  try {
+    const patch = join(f.home, 'cordis.patch.yml')
+    put(patch, readFileSync(patch, 'utf8') + '\n- insert:\n    - id: session-tools\n      name: dsh-session-tools\n')
+    const before = readFileSync(patch, 'utf8')
+    for (const checkOnly of [true, false]) {
+      const result = run(f, undefined, checkOnly)
+      assert.equal(result.status, 1)
+      assert.match(result.stderr, /both declared/)
+      assert.equal(readFileSync(patch, 'utf8'), before)
+    }
+  } finally { rmSync(f.root, { recursive: true, force: true }) }
+})
+
+test('repeated activation rejects without changing configuration', () => {
+  const f = fixture()
+  try {
+    assert.equal(run(f).status, 0)
+    const patch = join(f.home, 'cordis.patch.yml')
+    const manifest = join(f.home, 'profiles/web/package.json')
+    const beforePatch = readFileSync(patch, 'utf8')
+    const beforeManifest = readFileSync(manifest, 'utf8')
+    const result = run(f)
+    assert.equal(result.status, 1)
+    assert.match(result.stderr, /already declared/)
+    assert.equal(readFileSync(patch, 'utf8'), beforePatch)
+    assert.equal(readFileSync(manifest, 'utf8'), beforeManifest)
+  } finally { rmSync(f.root, { recursive: true, force: true }) }
+})
+
 test('default Web-only selection ignores unmigrated headless', () => {
   const f = fixture()
   try {
