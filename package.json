@@ -1,0 +1,37 @@
+{
+  "name": "dsh-session-tools",
+  "version": "0.1.0",
+  "description": "Indexed, project-scoped DSH session browsing tools",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "node --test tests/*.test.mjs",
+    "check": "pnpm build && pnpm test"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "4.0.4",
+    "@deepseek-ai/dsh-session": "0.1.7-rc.2",
+    "@deepseek-ai/dsh-session-query": "0.1.7-rc.2",
+    "@deepseek-ai/dsh-tools": "0.1.7-rc.2",
+    "@deepseek-ai/schemastery": "3.18.4"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "4.0.4",
+    "@deepseek-ai/cordis-plugin-include": "1.0.9",
+    "@deepseek-ai/cordis-plugin-loader": "1.0.5",
+    "@deepseek-ai/dsh-session": "0.1.7-rc.2",
+    "@deepseek-ai/dsh-session-query": "0.1.7-rc.2",
+    "@deepseek-ai/dsh-tools": "0.1.7-rc.2",
+    "@deepseek-ai/schemastery": "3.18.4",
+    "@types/node": "^26.6.3",
+    "typescript": "^5.9.3"
+  },
+  "license": "MIT"
+}
