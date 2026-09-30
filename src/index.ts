@@ -3,9 +3,9 @@ import type {} from '@deepseek-ai/dsh-session-projection'
 import Schema from '@deepseek-ai/schemastery'
 import { defineTool, type ToolRunContext } from '@deepseek-ai/dsh-tools'
 import { SessionId, SessionSeq } from '@deepseek-ai/dsh-session'
-import type { SessionRecord, SessionSearchCursor } from '@deepseek-ai/dsh-session-query'
+import type { SessionSearchCursor } from '@deepseek-ai/dsh-session-query'
 
-import { integer, bounded, trim, record, caller, authorize, fitsOrThrow, searchError, type JsonValue } from './shared.js'
+import { integer, bounded, trim, record, caller, authorize, fitsOrThrow, searchError } from './shared.js'
 import { output, scopeParam, targetParam, limitParam, call } from './definitions.js'
 import { readTools } from './read-tools.js'
 
@@ -82,70 +82,38 @@ export function apply(ctx: Context, config: Config): void {
     add(defineTool({ name: 'session_search', description: 'Indexed FTS token search across sessions; not arbitrary substring matching. Never scans logs. Excludes caller session by default.', parameters: { query: { type: 'string', required: true }, scope: scopeParam, ...limitParam, cursor: { type: 'string', description: 'Opaque continuation cursor.' }, include_current: { type: 'boolean', description: 'Include current session (default false).' } }, output, timeoutMs: searchTimeoutMs, presentCall: call('Search sessions'), async execute(args, exec) {
       const access = caller(exec, args.scope)
       const query = args.query.trim(); if (!query) throw new Error('query must not be empty')
-      const items: Array<{ session_id: string; title: string; cwd?: string | null; seq: number; type: string; snippet: string; snippet_truncated: boolean }> = []
-      let cursor = args.cursor as SessionSearchCursor | undefined
-      const checkpoints: Array<SessionSearchCursor | undefined> = []
-      const seen = new Set<string>()
-      while (items.length < size(args.limit)) {
-        exec.signal.throwIfAborted()
-        let page
-        try { page = await ctx.sessionQuery.searchSessions({ query, limit: 1, sessionFilters: access.project ? [{ kind: 'cwd', values: [access.cwd!] }] : [], ...(cursor ? { cursor } : {}) }, { signal: exec.signal }) }
-        catch (error) { searchError(error) }
-        exec.signal.throwIfAborted()
-        const hit = page.items[0]
-        if (hit && (!access.project || hit.header.cwd === access.cwd) && (args.include_current || hit.header.id !== access.id)) {
-          const next = { ...record(hit, '(untitled)', !access.project), seq: hit.bestMatch.seq, type: hit.bestMatch.type, snippet: trim(hit.bestMatch.snippet, previewChars).preview, snippet_truncated: trim(hit.bestMatch.snippet, previewChars).text_truncated }
-          if (!bounded({ items: [...items, next], has_more: !!page.nextCursor, next_cursor: page.nextCursor ?? null }, outputBytes)) {
-            if (!items.length) throw new Error('outputBytes cannot fit one indexed hit')
-            break
-          }
-          checkpoints.push(cursor)
-          items.push(next)
-        }
-        if (!page.nextCursor) { cursor = undefined; break }
-        if (seen.has(page.nextCursor) || page.nextCursor === cursor) throw new Error('Provider repeated search cursor')
-        seen.add(page.nextCursor); cursor = page.nextCursor
-      }
-      const names = await titles(items.map(item => id(item.session_id)), exec, access)
-      for (const item of items) item.title = names.get(item.session_id) ?? '(untitled)'
-      while (items.length && !bounded({ items, has_more: cursor !== undefined, next_cursor: cursor ?? null }, outputBytes)) {
-        items.pop(); cursor = checkpoints.pop()
-      }
-      if (!items.length && cursor !== undefined && !bounded({ items, has_more: true, next_cursor: cursor }, outputBytes)) throw new Error('outputBytes cannot fit search cursor')
-      if (!items.length && names.size) throw new Error('outputBytes cannot fit one indexed hit')
-      return fitsOrThrow({ items, has_more: cursor !== undefined, next_cursor: cursor ?? null }, outputBytes)
+      const requested = size(args.limit)
+      exec.signal.throwIfAborted()
+      let page
+      try { page = await ctx.sessionQuery.searchSessions({ query, limit: requested, sessionFilters: access.project ? [{ kind: 'cwd', values: [access.cwd!] }] : [], ...(args.cursor ? { cursor: args.cursor as SessionSearchCursor } : {}) }, { signal: exec.signal }) }
+      catch (error) { searchError(error) }
+      exec.signal.throwIfAborted()
+      const hits = page.items.filter(hit => args.include_current || hit.header.id !== access.id)
+      const names = await titles(hits.map(hit => hit.header.id), exec, access)
+      const items = hits.map(hit => ({ ...record(hit, names.get(hit.header.id), !access.project), seq: hit.bestMatch.seq, type: hit.bestMatch.type, snippet: trim(hit.bestMatch.snippet, previewChars).preview, snippet_truncated: trim(hit.bestMatch.snippet, previewChars).text_truncated }))
+      const result = { items, has_more: !!page.nextCursor, next_cursor: page.nextCursor ?? null }
+      if (!bounded(result, outputBytes)) throw new Error('Indexed search page exceeds outputBytes; lower limit and start a new search without a cursor, or increase configured outputBytes; no partial result was returned')
+      return result
     } }))
     add(defineTool({ name: 'session_event_search', description: 'Indexed FTS token search within a session; not arbitrary substring matching. Never scans logs. Current session excludes executing step.', parameters: { ...targetParam, query: { type: 'string', required: true }, scope: scopeParam, ...limitParam, cursor: { type: 'string' } }, output, timeoutMs: searchTimeoutMs, presentCall: call('Search events'), async execute(args, exec) {
       const access = caller(exec, args.scope); const sessionId = await target(args.session_id, exec, access)
       const query = args.query.trim(); if (!query) throw new Error('query must not be empty')
-      const items: JsonValue[] = []; let cursor = args.cursor as SessionSearchCursor | undefined
-      const seen = new Set<string>()
+      const requested = size(args.limit)
       // The active step is never searchable; prior steps in the same session remain available.
       const boundary = sessionId === access.id ? ctx.sessionProjections.stateOf(exec.agent!.session, 'turnBoundary')?.lastStepStartSeq : undefined
       if (sessionId === access.id && boundary == null) throw new Error('Current-session search requires a step/start event')
       const filters = boundary == null ? [] : [{ kind: 'seq' as const, to: boundary - 1 }]
       if (boundary === 0) return { session_id: sessionId, items: [], has_more: false, next_cursor: null }
-      while (items.length < size(args.limit)) {
-        exec.signal.throwIfAborted()
-        let page
-        try { page = await ctx.sessionQuery.searchEvents({ sessionId, query, filters, limit: 1, ...(cursor ? { cursor } : {}) }, { signal: exec.signal }) }
-        catch (error) { searchError(error) }
-        authorize(page.session, access)
-        exec.signal.throwIfAborted()
-        const hit = page.items[0]
-        if (hit) {
-          const next = { seq: hit.seq, type: hit.type, snippet: trim(hit.snippet, previewChars).preview, snippet_truncated: trim(hit.snippet, previewChars).text_truncated }
-          if (!bounded({ session_id: sessionId, items: [...items, next], has_more: !!page.nextCursor, next_cursor: page.nextCursor ?? null }, outputBytes)) {
-            if (!items.length) throw new Error('outputBytes cannot fit one indexed hit')
-            break
-          }
-          items.push(next)
-        }
-        if (!page.nextCursor) { cursor = undefined; break }
-        if (seen.has(page.nextCursor) || page.nextCursor === cursor) throw new Error('Provider repeated search cursor')
-        seen.add(page.nextCursor); cursor = page.nextCursor
-      }
-      return fitsOrThrow({ session_id: sessionId, items, has_more: cursor !== undefined, next_cursor: cursor ?? null }, outputBytes)
+      exec.signal.throwIfAborted()
+      let page
+      try { page = await ctx.sessionQuery.searchEvents({ sessionId, query, filters, limit: requested, ...(args.cursor ? { cursor: args.cursor as SessionSearchCursor } : {}) }, { signal: exec.signal }) }
+      catch (error) { searchError(error) }
+      authorize(page.session, access)
+      exec.signal.throwIfAborted()
+      const items = page.items.map(hit => ({ seq: hit.seq, type: hit.type, snippet: trim(hit.snippet, previewChars).preview, snippet_truncated: trim(hit.snippet, previewChars).text_truncated }))
+      const result = { session_id: sessionId, items, has_more: !!page.nextCursor, next_cursor: page.nextCursor ?? null }
+      if (!bounded(result, outputBytes)) throw new Error('Indexed search page exceeds outputBytes; lower limit and start a new search without a cursor, or increase configured outputBytes; no partial result was returned')
+      return result
     } }))
     for (const tool of readTools(ctx, { previewChars, outputBytes, size, target })) add(tool)
     return () => { for (const dispose of disposers.reverse()) dispose() }

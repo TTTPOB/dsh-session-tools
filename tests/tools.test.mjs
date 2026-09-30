@@ -27,14 +27,31 @@ test('project exact cwd and explicit all; missing cwd rejects project', async ()
   await assert.rejects(run(f, 'session_list', {}), /header.cwd/)
   assert.equal((await run(f, 'session_list', { scope: 'all' })).items.length, 3)
 })
-test('search uses index and preserves cursor when output budget stops page', async () => {
+test('session search returns the full provider page and one call with requested limit', async () => {
   const calls = []
-  const f = setup(provider({ searchSessions: async request => { calls.push(request); const n = Number(request.cursor ?? 0); return { items: [{ ...rows[0], header: header('a' + n), bestMatch: { seq: n, type: 'user/message', snippet: 'hello'.repeat(140) } }], nextCursor: String(n + 1) } } }), { outputBytes: 1024 })
-  const page = await run(f, 'session_search', { query: 'hello', limit: 3 })
-  assert.equal(page.items.length, 2); assert.equal(page.next_cursor, '2'); assert.equal(calls[0].sessionFilters[0].values[0], '/one')
-  assert.equal(calls[0].limit, 1)
-  assert.equal(page.items[0].snippet_truncated, true)
-  assert.equal('text_truncated' in page.items[0], false)
+  const f = setup(provider({ searchSessions: async request => { calls.push(request); return { items: [rows[0], rows[2]].map((row, seq) => ({ ...row, bestMatch: { seq, type: 'user/message', snippet: 'hello' } })), nextCursor: 'opaque' } } }))
+  const page = await run(f, 'session_search', { query: 'hello', limit: 2 })
+  assert.equal(calls.length, 1); assert.equal(calls[0].limit, 2)
+  assert.deepEqual(calls[0].sessionFilters, [{ kind: 'cwd', values: ['/one'] }])
+  assert.deepEqual(page.items.map(x => x.session_id), ['a'])
+  assert.equal(page.has_more, true); assert.equal(page.next_cursor, 'opaque')
+})
+test('self-only provider page may be empty with continuation and no refill', async () => {
+  let count = 0
+  const f = setup(provider({ searchSessions: async () => { count++; return { items: [{ ...rows[2], bestMatch: { seq: 1, type: 'user/message', snippet: 'hello' } }], nextCursor: 'next' } } }))
+  assert.deepEqual(await run(f, 'session_search', { query: 'hello', limit: 1 }), { items: [], has_more: true, next_cursor: 'next' })
+  assert.equal(count, 1)
+})
+test('both indexed tools reject oversized full pages without partial results or retries', async () => {
+  let sessions = 0; let events = 0
+  const f = setup(provider({
+    searchSessions: async () => { sessions++; return { items: [0, 1].map(seq => ({ ...rows[0], bestMatch: { seq, type: 'user/message', snippet: 'x'.repeat(700) } })), nextCursor: 'next' } },
+    searchEvents: async () => { events++; return { session: header('a'), items: [0, 1].map(seq => ({ seq, type: 'user/message', snippet: 'x'.repeat(700) })), nextCursor: 'next' } },
+  }), { outputBytes: 1024, previewChars: 700 })
+  for (const [name, args] of [['session_search', { query: 'x', limit: 2 }], ['session_event_search', { session_id: 'a', query: 'x', limit: 2 }]]) {
+    await assert.rejects(run(f, name, args), /lower limit and start a new search without a cursor.*no partial result/)
+  }
+  assert.equal(sessions, 1); assert.equal(events, 1)
 })
 test('disabled search does not call listing or fall back, retains code', async () => {
   let listed = false
@@ -101,11 +118,12 @@ test('current-session indexed search uses projection boundary, never lists raw e
   assert.equal((await run(f, 'session_event_search', { session_id: 'self', query: 'token' })).has_more, false)
   assert.deepEqual(range, { kind: 'seq', to: 2 })
 })
-test('search failure after first page propagates without partial success', async () => {
-  let count = 0
-  const f = setup(provider({ searchSessions: async () => { count++; if (count === 2) throw Object.assign(new Error('broken'), { code: 'SESSION_QUERY_INDEX_FAILED' }); return { items: [{ ...rows[0], bestMatch: { seq: 0, type: 'user/message', snippet: 'token' } }], nextCursor: 'next' } } }))
-  await assert.rejects(run(f, 'session_search', { query: 'token' }), e => e.code === 'SESSION_QUERY_INDEX_FAILED')
-  assert.equal(count, 2)
+test('event search returns provider page in one call with cursor unchanged', async () => {
+  const requests = []
+  const f = setup(provider({ searchEvents: async request => { requests.push(request); return { session: header('a'), items: [0, 1].map(seq => ({ seq, type: 'user/message', snippet: 'token' })), nextCursor: 'opaque' } } }))
+  const result = await run(f, 'session_event_search', { session_id: 'a', query: 'token', limit: 2 })
+  assert.equal(requests.length, 1); assert.equal(requests[0].limit, 2)
+  assert.deepEqual(result.items.map(item => item.seq), [0, 1]); assert.equal(result.next_cursor, 'opaque')
 })
 test('abort before indexed query and mid-provider result prevents success', async () => {
   let searched = false

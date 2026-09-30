@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, rmSync, writeFileSync, realpathSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync, realpathSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
 import { createRequire } from 'node:module'
@@ -10,9 +10,10 @@ const source = dirname(dirname(fileURLToPath(import.meta.url)))
 const root = mkdtempSync(join(tmpdir(), 'dsh-session-tools-pack-'))
 try {
   writeFileSync(join(root, 'package.json'), JSON.stringify({ name: 'session-tools-smoke', private: true, type: 'module' }))
+  const { version } = JSON.parse(readFileSync(join(source, 'package.json'), 'utf8'))
   execFileSync('pnpm', ['pack', '--pack-destination', root], { cwd: source, stdio: 'pipe' })
   execFileSync('pnpm', ['--config.auto-install-peers=false', 'add',
-    join(root, 'dsh-session-tools-0.1.0.tgz'),
+    join(root, `dsh-session-tools-${version}.tgz`),
     '@deepseek-ai/cordis@4.0.4', '@deepseek-ai/dsh-tools@0.1.7-rc.2',
     '@deepseek-ai/dsh-session-query@0.1.7-rc.2', '@deepseek-ai/dsh-session@0.1.7-rc.2',
     '@deepseek-ai/dsh-session-projection@0.1.7-rc.2', '@deepseek-ai/schemastery@3.18.4',
