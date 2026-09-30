@@ -59,6 +59,11 @@ test('actual SQLite index honors project/all, cursor and native tool results', a
     assert.equal(trace.target.seq, 0)
     const lineage = await execute('session_trace', { session_id: 'one' })
     assert.equal(lineage.target.session_id, 'one')
+    // Use multiple requested hits so the old internal paging loop would fail.
+    for (const id of ['three', 'four']) {
+      const session = ctx.sessions.create(SessionId(id), { meta: { createdAt: 5, cwd: '/one' } })
+      session.append('user/message', createUserMessage({ content: [{ type: 'text', text: `indexed needle ${id}` }], source: { kind: 'user' } }), { surfaceOp: 'append' })
+    }
     // A live update after the provider returns must not invalidate this first tool call.
     const originalSearch = ctx.sessionQuery.searchSessions.bind(ctx.sessionQuery)
     let providerCalls = 0
@@ -68,12 +73,15 @@ test('actual SQLite index honors project/all, cursor and native tool results', a
       caller.append('user/message', createUserMessage({ content: [{ type: 'text', text: 'indexed needle live' }], source: { kind: 'user' } }), { surfaceOp: 'append' })
       return page
     }
-    const livePage = await execute('session_search', { query: 'needle', limit: 1 })
-    assert.equal(providerCalls, 1); assert.equal(livePage.items.length, 1)
+    const livePage = await execute('session_search', { query: 'needle', limit: 3 })
+    assert.equal(providerCalls, 1); assert.equal(livePage.items.length, 3)
     assert.equal(livePage.has_more, true)
-    const stale = await ctx.tools.execute({ name: 'session_search', arguments: { query: 'needle', limit: 1, cursor: livePage.next_cursor }, callId: ToolCallId(`sqlite-${++serial}`), signal: new AbortController().signal, agent: { id: caller.id, session: caller } })
+    const stale = await ctx.tools.execute({ name: 'session_search', arguments: { query: 'needle', limit: 3, cursor: livePage.next_cursor }, callId: ToolCallId(`sqlite-${++serial}`), signal: new AbortController().signal, agent: { id: caller.id, session: caller } })
     assert.equal(stale.isError, true); assert.match(JSON.stringify(stale), /stale|cursor/i)
     ctx.sessionQuery.searchSessions = originalSearch
+    for (const text of ['indexed needle extra first', 'indexed needle extra second']) {
+      ctx.sessions.get(SessionId('one')).append('user/message', createUserMessage({ content: [{ type: 'text', text }], source: { kind: 'user' } }), { surfaceOp: 'append' })
+    }
     const originalEvents = ctx.sessionQuery.searchEvents.bind(ctx.sessionQuery)
     let eventCalls = 0
     ctx.sessionQuery.searchEvents = async (...args) => {
@@ -82,7 +90,7 @@ test('actual SQLite index honors project/all, cursor and native tool results', a
       ctx.sessions.get(SessionId('one')).append('user/message', createUserMessage({ content: [{ type: 'text', text: 'indexed needle appended' }], source: { kind: 'user' } }), { surfaceOp: 'append' })
       return page
     }
-    const eventPage = await execute('session_event_search', { session_id: 'one', query: 'needle', limit: 1 })
-    assert.equal(eventCalls, 1); assert.equal(eventPage.items.length, 1)
+    const eventPage = await execute('session_event_search', { session_id: 'one', query: 'needle', limit: 2 })
+    assert.equal(eventCalls, 1); assert.equal(eventPage.items.length, 2)
   } finally { await ctx.fiber.dispose(); await rm(root, { recursive: true, force: true }) }
 })
