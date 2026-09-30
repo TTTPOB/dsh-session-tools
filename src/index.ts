@@ -82,7 +82,7 @@ export function apply(ctx: Context, config: Config): void {
     add(defineTool({ name: 'session_search', description: 'Indexed FTS token search across sessions; not arbitrary substring matching. Never scans logs. Excludes caller session by default.', parameters: { query: { type: 'string', required: true }, scope: scopeParam, ...limitParam, cursor: { type: 'string', description: 'Opaque continuation cursor.' }, include_current: { type: 'boolean', description: 'Include current session (default false).' } }, output, timeoutMs: searchTimeoutMs, presentCall: call('Search sessions'), async execute(args, exec) {
       const access = caller(exec, args.scope)
       const query = args.query.trim(); if (!query) throw new Error('query must not be empty')
-      const items: Array<{ session_id: string; title: string; cwd?: string | null; seq: number; type: string; snippet: string; text_truncated: boolean }> = []
+      const items: Array<{ session_id: string; title: string; cwd?: string | null; seq: number; type: string; snippet: string; snippet_truncated: boolean }> = []
       let cursor = args.cursor as SessionSearchCursor | undefined
       const checkpoints: Array<SessionSearchCursor | undefined> = []
       const seen = new Set<string>()
@@ -94,7 +94,7 @@ export function apply(ctx: Context, config: Config): void {
         exec.signal.throwIfAborted()
         const hit = page.items[0]
         if (hit && (!access.project || hit.header.cwd === access.cwd) && (args.include_current || hit.header.id !== access.id)) {
-          const next = { ...record(hit, '(untitled)', !access.project), seq: hit.bestMatch.seq, type: hit.bestMatch.type, snippet: trim(hit.bestMatch.snippet, previewChars).preview, text_truncated: trim(hit.bestMatch.snippet, previewChars).text_truncated }
+          const next = { ...record(hit, '(untitled)', !access.project), seq: hit.bestMatch.seq, type: hit.bestMatch.type, snippet: trim(hit.bestMatch.snippet, previewChars).preview, snippet_truncated: trim(hit.bestMatch.snippet, previewChars).text_truncated }
           if (!bounded({ items: [...items, next], has_more: !!page.nextCursor, next_cursor: page.nextCursor ?? null }, outputBytes)) {
             if (!items.length) throw new Error('outputBytes cannot fit one indexed hit')
             break
@@ -134,7 +134,7 @@ export function apply(ctx: Context, config: Config): void {
         exec.signal.throwIfAborted()
         const hit = page.items[0]
         if (hit) {
-          const next = { seq: hit.seq, type: hit.type, snippet: trim(hit.snippet, previewChars).preview, text_truncated: trim(hit.snippet, previewChars).text_truncated }
+          const next = { seq: hit.seq, type: hit.type, snippet: trim(hit.snippet, previewChars).preview, snippet_truncated: trim(hit.snippet, previewChars).text_truncated }
           if (!bounded({ session_id: sessionId, items: [...items, next], has_more: !!page.nextCursor, next_cursor: page.nextCursor ?? null }, outputBytes)) {
             if (!items.length) throw new Error('outputBytes cannot fit one indexed hit')
             break

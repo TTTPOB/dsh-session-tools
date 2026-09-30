@@ -33,6 +33,8 @@ test('search uses index and preserves cursor when output budget stops page', asy
   const page = await run(f, 'session_search', { query: 'hello', limit: 3 })
   assert.equal(page.items.length, 2); assert.equal(page.next_cursor, '2'); assert.equal(calls[0].sessionFilters[0].values[0], '/one')
   assert.equal(calls[0].limit, 1)
+  assert.equal(page.items[0].snippet_truncated, true)
+  assert.equal('text_truncated' in page.items[0], false)
 })
 test('disabled search does not call listing or fall back, retains code', async () => {
   let listed = false

@@ -28,6 +28,7 @@ export function readTools(ctx: Context, options: {
       let preview = new Map<number, string>()
       if (args.view !== 'metadata' && eligible.length && previewChars > 0) {
         const docs = await ctx.sessionQuery.filterEvents(sessionId, [{ kind: 'seq', from: eligible[0]!.seq, to: eligible.at(-1)!.seq }])
+        exec.signal.throwIfAborted()
         preview = new Map(docs.map(doc => [doc.seq, doc.text]))
       }
       let lastSeq = args.after_seq ?? null
@@ -73,7 +74,7 @@ export function readTools(ctx: Context, options: {
         else high = mid - 1
       }
       if (offset < points.length && !low) throw new Error('outputBytes cannot fit one JSON fragment')
-      return { ...base, json_fragment: points.slice(offset, offset + low).join(''), has_more: offset + low < points.length, next_offset: offset + low < points.length ? offset + low : null }
+      return fitsOrThrow({ ...base, json_fragment: points.slice(offset, offset + low).join(''), has_more: offset + low < points.length, next_offset: offset + low < points.length ? offset + low : null }, outputBytes)
     } }))
     tools.push(defineTool({ name: 'session_trace', description: 'Trace complete visible ancestry and descendants; project hides relations outside exact cwd, all reveals current provider.', parameters: { ...targetParam, scope: scopeParam }, output, presentCall: call('Trace session'), async execute(args, exec) {
       const access = caller(exec, args.scope); const sessionId = await target(args.session_id, exec, access)

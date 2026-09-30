@@ -43,7 +43,7 @@ export function hiddenDescendant(nodes: readonly SessionLineageNode[], cwd: stri
 }
 /** Reject an oversized complete result without dropping relationships. */
 export function fitsOrThrow<T extends object>(value: T, budget: number): T {
-  if (!bounded(value, budget)) throw new Error('Trace exceeds outputBytes; narrow the target or increase configured outputBytes; no relationships were omitted')
+  if (!bounded(value, budget)) throw new Error('Result exceeds outputBytes; narrow the request or increase configured outputBytes; no partial result was returned')
   return value
 }
 /** Preserve the provider error identity and annotate no-scan guidance. */
