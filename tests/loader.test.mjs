@@ -18,6 +18,7 @@ test('real Cordis Loader mounts built ESM through cordis.yml then disposes tools
     await writeFile(configPath, "- name: 'dsh-session-tools'\n")
     ctx.baseUrl = pathToFileURL(root).href + '/'
     ctx.provide('tools', { register(definition) { tools.set(definition.name, definition); return () => tools.delete(definition.name) } })
+    ctx.provide('sessionProjections', { stateOf: () => ({ lastStepStartSeq: 3 }) })
     ctx.provide('sessionQuery', { listSessions: async () => [] })
     await ctx.plugin(Loader)
     ctx.loader.builtins.include = Include
