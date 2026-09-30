@@ -33,6 +33,18 @@ node /home/tpob/playground/dsh/dsh-session-tools/deploy/activate.mjs "$DSH_HOME"
 
 在隔离 `DSH_HOME` 副本中用 `dsh --profile web --dump-config` 检查新行、旧 bundle、官方同名工具及 SQLite 配置；不要展示包含凭据的完整 dump。用户确认后自行按原方式重启 Host。
 
+## 已激活 0.1.0：升级到 0.1.1
+
+已完成首次切换的用户，先停止受影响 Host，在外部终端将已验证的 0.1.1 tarball 安装到消费 profile，再对同一 tarball 执行只读验收：
+
+```sh
+TARBALL=/home/tpob/playground/dsh/artifacts/dsh-session-tools-0.1.1/dsh-session-tools-0.1.1.tgz
+pnpm --dir "$DSH_HOME/profiles/web" add --ignore-workspace --config.auto-install-peers=false --config.enable-global-virtual-store=false "file:$TARBALL"
+node /home/tpob/playground/dsh/dsh-session-tools/deploy/activate.mjs --check-only "$DSH_HOME" "$TARBALL" "$HOST_MANIFEST"
+```
+
+保留 tarball 供 `file:` 依赖使用。`--check-only` 同时支持首次切换前（旧 Web bundle 在、新全局行不在）及已激活（新全局行在、旧 Web bundle 已移除）；已激活时不要求旧依赖仍安装。若新旧两者同时声明则拒绝。升级时**不要再次运行不带 `--check-only` 的首次 activate**，也无需安装完成后修改全局插件行；预检通过后由用户自行按原方式重启 Host。其他已迁移的消费 profile 也应先用 pnpm 安装同版 tarball，并用可选 profile 列表纳入预检。不运行实际配置切换、不启动索引。
+
 ## 3. 重启验证后的收尾与回滚
 
 验证新七个工具和原索引组合后，用户在外部终端用 pnpm 卸载 Web 旧依赖（**先确认旧 bundle 已移除**）：
