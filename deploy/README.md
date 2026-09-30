@@ -38,7 +38,7 @@ node /home/tpob/playground/dsh/dsh-session-tools/deploy/activate.mjs "$DSH_HOME"
 已完成首次切换的用户，先停止受影响 Host，在外部终端将已验证的 0.1.1 tarball 安装到消费 profile，再对同一 tarball 执行只读验收：
 
 ```sh
-TARBALL=/absolute/path/to/dsh-session-tools-0.1.1.tgz
+TARBALL=/home/tpob/playground/dsh/artifacts/dsh-session-tools-0.1.1/dsh-session-tools-0.1.1.tgz
 pnpm --dir "$DSH_HOME/profiles/web" add --ignore-workspace --config.auto-install-peers=false --config.enable-global-virtual-store=false "file:$TARBALL"
 node /home/tpob/playground/dsh/dsh-session-tools/deploy/activate.mjs --check-only "$DSH_HOME" "$TARBALL" "$HOST_MANIFEST"
 ```
