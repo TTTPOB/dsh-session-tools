@@ -27,5 +27,5 @@ try {
   const entry = await import(pluginPath)
   assert.equal(entry.name, 'dsh-session-tools')
   assert.equal(typeof entry.apply, 'function')
-  console.log('tarball built ESM and explicitly installed runtime peers resolve to one identity; auto-install-peers=false')
+  console.log('Packaging-only smoke passed with explicitly installed peers; this is NOT Host-provided profile-peer validation. Run deploy/activate.test.mjs and --check-only against the consuming profile.')
 } finally { rmSync(root, { recursive: true, force: true }) }

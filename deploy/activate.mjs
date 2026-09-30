@@ -5,9 +5,11 @@ import { createRequire } from 'node:module'
 import { pathToFileURL } from 'node:url'
 import { resolve, join, dirname, isAbsolute } from 'node:path'
 
-const [home, tarball, hostManifest, profileNames = 'web'] = process.argv.slice(2)
+const args = process.argv.slice(2)
+const checkOnly = args[0] === '--check-only'
+const [home, tarball, hostManifest, profileNames = 'web'] = checkOnly ? args.slice(1) : args
 if (!home || !tarball || !isAbsolute(tarball) || !existsSync(tarball) || !hostManifest || !isAbsolute(hostManifest) || !existsSync(hostManifest)) {
-  console.error('Usage: node activate.mjs /absolute/DSH_HOME /absolute/dsh-session-tools.tgz /absolute/installed-host/package.json')
+  console.error('Usage: node activate.mjs [--check-only] /absolute/DSH_HOME /absolute/dsh-session-tools.tgz /absolute/installed-host/package.json [web,headless]')
   process.exit(2)
 }
 const profiles = profileNames.split(',')
@@ -28,7 +30,12 @@ const parse = path => JSON.parse(read(path))
 try {
   if (root === '/' || !lstatSync(root).isDirectory()) fail('DSH_HOME must be an existing directory')
   const tarballPath = realpathSync(tarball)
-  const hostReq = createRequire(hostManifest)
+  // pnpm exposes a top-level link; its real package directory owns the Host dependencies.
+  const hostAnchor = realpathSync(hostManifest)
+  const hostReq = createRequire(hostAnchor)
+  // Use the public boot package's profile resolver, not Node's unmodified package lookup.
+  const { loadProfileDirectory, createRuntimeResolution, PluginPackages } = await import(pathToFileURL(hostReq.resolve('@deepseek-ai/dsh-app-boot')).href)
+  const { Context } = await import(pathToFileURL(hostReq.resolve('@deepseek-ai/cordis')).href)
   const data = manifests.map(path => ({ path, json: parse(path) }))
   const web = data.find(item => item.path === webManifest).json
   const oldPatch = read(patch)
@@ -53,22 +60,52 @@ try {
       pluginManifest = parse(join(profile, 'node_modules', plugin, 'package.json'))
     } catch { fail(`${profile}: cannot locate built plugin entry and manifest`) }
     if (entry.endsWith('.ts')) fail(`${profile}: plugin entry is TypeScript, not built JavaScript`)
-    try { await import(pathToFileURL(entry).href) } catch (error) { fail(`${profile}: built plugin entry failed import: ${error.message}`) }
-    const pluginReq = createRequire(entry)
-    for (const peer of Object.keys(pluginManifest.peerDependencies || {})) {
-      let actual
-      try { actual = realpathSync(pluginReq.resolve(peer)) } catch { fail(`${profile}: missing peer ${peer} at actual plugin entry`) }
-      if (peer === '@deepseek-ai/cordis' || peer === '@deepseek-ai/schemastery') {
-        let host
-        try { host = realpathSync(hostReq.resolve(peer)) } catch { fail(`Host cannot resolve shared peer ${peer}`) }
-        if (actual !== host) fail(`${profile}: ${peer} resolves to a different copy than Host`)
+    const loadedProfile = loadProfileDirectory('dsh-session-tools preflight', profile, hostAnchor)
+    const resolution = await createRuntimeResolution({ installAnchor: hostAnchor, profile: loadedProfile, home: root })
+    const ctx = new Context()
+    try {
+      await ctx.plugin(PluginPackages, { resolution })
+      const entryUrl = pathToFileURL(entry).href
+      const selected = ctx.pluginPackages.packageOf(plugin, pathToFileURL(path).href)
+      if (selected === undefined || realpathSync(selected.dir) !== realpathSync(join(profile, 'node_modules', plugin))) {
+        fail(`${profile}: profile resolver selected a different plugin package`)
       }
+      for (const peer of Object.keys(pluginManifest.peerDependencies || {})) {
+        const expected = resolution.entries.find(item => item.name === peer && item.scope === 'installation')
+        if (expected === undefined) fail(`${profile}: Host does not provide shared peer ${peer}`)
+        const actual = ctx.pluginPackages.packageOf(peer, entryUrl)
+        if (actual === undefined) fail(`${profile}: profile resolver cannot locate peer ${peer}`)
+        if (peer !== '@deepseek-ai/schemastery' && realpathSync(actual.dir) !== realpathSync(expected.packageDir)) {
+          fail(`${profile}: ${peer} resolves to a different copy than Host`)
+        }
+        if (peer === '@deepseek-ai/schemastery' && actual.version !== expected.version) {
+          fail(`${profile}: Schemastery version differs from Host`)
+        }
+      }
+      let module
+      try { module = await import(entryUrl) } catch (error) {
+        fail(`${profile}: built plugin entry failed DSH profile import (${error.code || error.name || 'unknown error'})`)
+      }
+      if (module.name !== plugin || typeof module.apply !== 'function') fail(`${profile}: built plugin entry has invalid named exports`)
+      // Validate the plugin's own schema through the Host's Schemastery, as the Loader does.
+      const hostSchema = (await import(pathToFileURL(hostReq.resolve('@deepseek-ai/schemastery')).href)).default
+      const [defaults] = hostSchema.resolve({}, module.Config, {})
+      if (defaults.pageSize !== 30 || defaults.maxPageSize !== 100) fail(`${profile}: Config defaults failed Host validation`)
+      let rejected = false
+      try { hostSchema.resolve({ pageSize: 0 }, module.Config, {}) } catch { rejected = true }
+      if (!rejected) fail(`${profile}: invalid Config passed Host validation`)
+    } finally {
+      await ctx.fiber.dispose()
     }
   }
   if (oldPatch.includes("name: '@deepseek-ai/dsh-tool-session-query'") || oldPatch.includes('name: "@deepseek-ai/dsh-tool-session-query"')) fail('Official session tool is present in home patch; remove or disable it first')
   for (const name of profiles) {
     const profilePatch = join(root, `profiles/${name}/cordis.patch.yml`)
     if (existsSync(profilePatch) && read(profilePatch).includes('@deepseek-ai/dsh-tool-session-query')) fail(`${name}: official session tool found in profile patch`)
+  }
+  if (checkOnly) {
+    console.log(`Read-only DSH profile preflight passed for ${profiles.join(',')}; no configuration changed.`)
+    process.exit(0)
   }
   web.dsh.profile.bundles = web.dsh.profile.bundles.filter(x => x !== 'dsh-session-search-pro')
   const newPatch = oldPatch + "\n- insert:\n    - id: session-tools\n      name: dsh-session-tools\n"
