@@ -1,6 +1,6 @@
 # dsh-session-tools：用户自行安装与配置切换
 
-**先拿到已验证的插件 tarball 绝对路径，不要在安装前启用全局插件行。** 本入口默认只处理当前已迁移的 `web` profile；全局 Cordis patch 仍共享，并非 Web 特化。按既有 [共享迁移规范](../../docs/dsh-fork-install.md#其他消费-profile)，尚未迁移共用依赖的 headless、paper-chew 当前不可宣称可用；日后确需消费全局插件时，先按既有流程迁移共用依赖，再安装新插件并显式纳入预检。脚本不自动修复旧 profile。
+**先拿到已验证的插件 tarball 绝对路径，不要在安装前启用全局插件行。** 本入口默认只处理当前已迁移的 `web` profile；全局 Cordis patch 仍共享，并非 Web 特化。按既有 [共享迁移规范](../../../docs/dsh-fork-install.md#其他消费-profile)，尚未迁移共用依赖的 headless、paper-chew 当前不可宣称可用；日后确需消费全局插件时，先按既有流程迁移共用依赖，再安装新插件并显式纳入预检。脚本不自动修复旧 profile。
 
 ## 1. 用户在外部终端安装
 
@@ -8,7 +8,10 @@
 
 ```sh
 DSH_HOME=/home/tpob/.dsh
-TARBALL=/absolute/path/to/dsh-session-tools.tgz
+TARBALL=/home/tpob/playground/dsh/artifacts/dsh-session-tools-0.1.0/dsh-session-tools-0.1.0.tgz
+BACKUP="$DSH_HOME/backups/session-tools-preinstall-$(date +%Y%m%d-%H%M%S)"
+(umask 077; mkdir -p "$BACKUP/web"; cp "$DSH_HOME/cordis.patch.yml" "$BACKUP/"; cp "$DSH_HOME/profiles/web/"{package.json,cordis.patch.yml,pnpm-lock.yaml} "$BACKUP/web/")
+printf 'Pre-install backup: %s\n' "$BACKUP"
 pnpm --dir "$DSH_HOME/profiles/web" add --ignore-workspace --config.auto-install-peers=false --config.enable-global-virtual-store=false "file:$TARBALL"
 ```
 
@@ -20,7 +23,7 @@ pnpm --dir "$DSH_HOME/profiles/web" add --ignore-workspace --config.auto-install
 
 ```sh
 HOST_MANIFEST=/home/tpob/.local/share/pnpm/global/v11/304e3f-1a0f1838a1e-4a7ea5c36f67531c/node_modules/@deepseek-ai/dsh/package.json
-node /home/tpob/playground/dsh/artifacts/session-tools-deployment/activate.mjs "$DSH_HOME" "$TARBALL" "$HOST_MANIFEST"
+node /home/tpob/playground/dsh/dsh-session-tools/deploy/activate.mjs "$DSH_HOME" "$TARBALL" "$HOST_MANIFEST"
 ```
 
 可选第四参数是已迁移且已安装新插件的消费 profile 名称列表，默认 `web`；如 `web,headless`。必须包含 Web，因为脚本会从 Web bundle 删除旧插件。它只检查**指定** profile 显式共用依赖、插件的构建入口实际导入、peer 实际解析及与 Host 的共享 Cordis／Schemastery 身份；没有通过就不切换。预检通过后，脚本把本次相关现有配置及 lockfile 私密备份至所报告目录，在**全局** patch 加入新插件，并从 Web bundles 删除旧第三方 bundle；旧依赖暂留，留给 pnpm 管理。脚本不重启 Host、不改 SQLite／persistence provider、索引或优化。
