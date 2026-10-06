@@ -29,11 +29,6 @@ export function caller(exec: ToolRunContext, scope: string | undefined): { cwd?:
 export function authorize(header: SessionHeader, access: ReturnType<typeof caller>): void {
   if (access.project && header.cwd !== access.cwd) throw new Error('Session is outside the caller project')
 }
-/** Hide out-of-project descendant subtrees and their identities. */
-export function safeTrace(node: SessionLineageNode, access: ReturnType<typeof caller>): JsonValue | null {
-  if (access.project && node.session.header.cwd !== access.cwd) return null
-  return { session: record(node.session, undefined, !access.project), descendants: node.descendants.map(child => safeTrace(child, access)).filter(child => child !== null) }
-}
 /** Detect whether project scope omitted any descendants. */
 export function hiddenDescendant(nodes: readonly SessionLineageNode[], cwd: string): boolean {
   for (const node of nodes) {

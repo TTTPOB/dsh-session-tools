@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { apply } from '../dist/index.js'
 
-const config = { pageSize: 30, maxPageSize: 100, previewChars: 240, outputBytes: 24576, searchTimeoutMs: 30000 }
+const config = { pageSize: 30, maxPageSize: 100, previewChars: 240, outputBytes: 24576, searchTimeoutMs: 30000, eventReadCacheEntries: 8, eventReadCacheBytes: 67108864 }
 function setup(query, options = {}) {
   const definitions = new Map()
   let cleanup
@@ -14,7 +14,36 @@ function setup(query, options = {}) {
 }
 const header = (id, cwd = '/one') => ({ id, cwd, createdAt: 1 })
 const rows = [header('a'), header('b', '/two'), header('self')].map(header => ({ header, live: false, persisted: true }))
-function provider(extra = {}) { return { readTitleSnapshots: async ids => ids.map(sessionId => ({ sessionId, status: 'fulfilled', value: { session: rows.find(item => item.header.id === sessionId)?.header ?? header(sessionId), title: { title: 'Test title' } } })), listSessions: async () => rows, filterSessions: async filters => rows.filter(x => x.header.id === filters[0].values[0]), listEvents: async () => [], filterEvents: async () => [], readEvent: async () => ({ session: header('a'), target: { seq: 0, type: 'user/message', text: '你好' } }), traceSession: async () => ({ target: rows[0], ancestors: [rows[1]], descendants: [{ session: rows[1], descendants: [{ session: rows[0], descendants: [] }] }], complete: true, root: rows[1] }), traceEvent: async () => ({ session: header('a'), target: { sessionId: 'a', seq: 0, type: 'user/message', time: 0, surface: 'current' }, replacementChain: [2], replacedEventSeqs: [], sourceEventSeqs: [1], derivedEventSeqs: [3] }), ...extra } }
+function provider(extra = {}) {
+  return {
+    async pageSessions(request) {
+      const source = await (extra.listSessions?.() ?? rows)
+      const visible = source.filter(row => !request.filters?.length || row.header.cwd === request.filters[0].values[0])
+      const offset = Number(request.cursor ?? 0)
+      return { items: visible.slice(offset, offset + request.limit), ...(offset + request.limit < visible.length ? { nextCursor: String(offset + request.limit) } : {}) }
+    },
+    async pageEvents(request) {
+      const records = await (extra.listEvents?.() ?? [])
+      const selected = records.filter(item => item.seq > (request.afterSeq ?? -1) && (request.types === undefined || request.types.includes(item.type)))
+      const items = selected.slice(0, request.limit)
+      const docs = request.includeText && items.length ? await (extra.filterEvents?.(request.sessionId, [{ kind: 'seq', from: items[0].seq, to: items.at(-1).seq }]) ?? []) : []
+      return {
+        session: header(request.sessionId),
+        items: items.map(item => { const doc = docs.find(doc => doc.seq === item.seq); return { ...item, ...(doc ? { text: doc.text } : {}) } }),
+        ...(selected.length > items.length ? { nextAfterSeq: items.at(-1).seq } : {}),
+        capturedThroughSeq: records.at(-1)?.seq ?? -1,
+      }
+    },
+    readTitleSnapshots: async ids => ids.map(sessionId => ({ sessionId, status: 'fulfilled', value: { session: rows.find(item => item.header.id === sessionId)?.header ?? header(sessionId), title: { title: 'Test title' } } })),
+    listSessions: async () => rows,
+    filterSessions: async filters => rows.filter(x => x.header.id === filters[0].values[0]),
+    listEvents: async () => [], filterEvents: async () => [],
+    readEvent: async () => ({ session: header('a'), target: { seq: 0, type: 'user/message', text: '你好' } }),
+    traceSession: async () => ({ target: rows[0], ancestors: [rows[1]], descendants: [{ session: rows[1], descendants: [{ session: rows[0], descendants: [] }] }], complete: true, root: rows[1] }),
+    traceEvent: async () => ({ session: header('a'), target: { sessionId: 'a', seq: 0, type: 'user/message', time: 0, surface: 'current' }, replacementChain: [2], replacedEventSeqs: [], sourceEventSeqs: [1], derivedEventSeqs: [3] }),
+    ...extra,
+  }
+}
 const run = (fixture, tool, args) => fixture.definitions.get(tool).execute(args, fixture.exec)
 test('all seven native-object tools register and dispose', () => {
   const fixture = setup(provider()); assert.equal(fixture.definitions.size, 7)
@@ -197,9 +226,7 @@ test('complete list and search output budgets count cached flags', async () => {
   const listBudget = Buffer.byteLength(JSON.stringify({ ...list, items: list.items.map(({ title_cached, ...item }) => item) }))
   const limitedList = setup(f.ctx.sessionQuery, { previewChars: 1000, outputBytes: listBudget })
   limitedList.ctx.sessionProjectionCache = f.ctx.sessionProjectionCache
-  const partial = await run(limitedList, 'session_list', {})
-  assert.equal(partial.items.length, 1); assert.equal(partial.has_more, true); assert.equal(partial.next_offset, 1)
-  assert.ok(Buffer.byteLength(JSON.stringify(partial)) <= listBudget)
+  await assert.rejects(run(limitedList, 'session_list', {}), /lower limit.*no partial result/)
   const search = await run(f, 'session_search', { query: 'hit' })
   const searchBudget = Buffer.byteLength(JSON.stringify({ ...search, items: search.items.map(({ title_cached, ...item }) => item) }))
   const limitedSearch = setup(f.ctx.sessionQuery, { previewChars: 1000, outputBytes: searchBudget })
@@ -215,8 +242,8 @@ test('filtered event previews use selected seq range and count Chinese code poin
   const page = await run(f, 'session_event_list', { session_id: 'a', event_types: ['user/message'], limit: 2 })
   assert.deepEqual(ranges[0], { kind: 'seq', from: 1, to: 3 })
   assert.deepEqual(page.items.map(x => x.seq), [1, 3]); assert.equal(page.items[0].preview, '中文😀')
-  assert.equal(page.items[0].text_truncated, true); assert.equal(page.has_more, true)
-  assert.equal(page.next_after_seq, 3)
+  assert.equal(page.items[0].text_truncated, true); assert.equal(page.has_more, false)
+  assert.equal(page.next_after_seq, null)
 })
 test('current-session indexed search uses projection boundary, never lists raw events', async () => {
   let range
@@ -249,6 +276,8 @@ test('config schema defaults and rejects invalid values', async () => {
   assert.deepEqual(Config({}), config)
   assert.throws(() => Config({ outputBytes: 128 }), /outputBytes/)
   assert.throws(() => Config({ searchTimeoutMs: 0 }), /searchTimeoutMs/)
+  assert.throws(() => Config({ eventReadCacheEntries: -1 }), /eventReadCacheEntries/)
+  assert.throws(() => Config({ eventReadCacheBytes: -1 }), /eventReadCacheBytes/)
   assert.throws(() => setup(provider(), { pageSize: 90, maxPageSize: 10 }), /pageSize/)
 })
 test('long cursor cannot escape final output UTF-8 budget', async () => {
@@ -280,4 +309,97 @@ test('own-session cursor across a new step rejects stale provider cursor', async
   boundary = 9
   f.ctx.sessionProjections.stateOf = () => ({ lastStepStartSeq: boundary })
   await assert.rejects(original.execute({ session_id: 'self', query: 'needle', limit: 1, cursor: first.next_cursor }, f.exec), e => e.code === 'SESSION_QUERY_STALE_CURSOR' && /no logs were scanned/i.test(e.message))
+})
+
+test('trace titles batch only visible nodes, deduplicate root and preserve cached flags', async () => {
+  const batches = []; const cacheIds = []
+  const child = { header: header('child'), live: false, persisted: true }
+  const f = setup(provider({ traceSession: async () => ({ target: rows[0], ancestors: [rows[2], rows[1]], descendants: [{ session: child, descendants: [] }, { session: rows[1], descendants: [{ session: rows[0], descendants: [] }] }], complete: true, root: rows[1] }), readTitleSnapshots: async ids => { batches.push(ids); return ids.map(sessionId => ({ sessionId, status: 'fulfilled', value: { session: header(sessionId), title: { title: sessionId + ' title' } } })) } }))
+  f.ctx.sessionProjectionCache = { cachedSnapshot(meta) { cacheIds.push(meta.id); return meta.id === 'child' ? { values: { title: 'Child hint' } } : meta.id === 'b' ? { values: { title: 'Root hint' } } : undefined }, cachedPredecessorTitle: () => undefined }
+  const project = await run(f, 'session_trace', { session_id: 'a' })
+  assert.deepEqual(batches, [['a', 'self']]); assert.deepEqual(cacheIds, ['a', 'self', 'child'])
+  assert.equal(project.target.title, 'a title'); assert.equal(project.ancestors[0].title, 'self title')
+  assert.deepEqual(project.descendants[0].session, { session_id: 'child', title: 'Child hint', title_cached: true })
+  batches.length = 0; cacheIds.length = 0
+  const all = await run(f, 'session_trace', { session_id: 'a', scope: 'all' })
+  assert.deepEqual(batches, [['a', 'self']]); assert.equal(all.root.title, 'Root hint'); assert.equal(all.root.title_cached, true)
+  assert.equal(all.descendants[1].descendants[0].session.title, 'a title')
+})
+test('large-event continuations reuse preparation, refresh on restart and reauthorize every call', async () => {
+  let reads = 0; let text = '旧😀'.repeat(3000)
+  const f = setup(provider({ readEvent: async () => { reads++; return { session: header('a'), target: { seq: 0, text } } } }), { outputBytes: 1024 })
+  const first = await run(f, 'session_event_read', { session_id: 'a', seq: 0 })
+  text = '新😀'.repeat(3000)
+  const second = await run(f, 'session_event_read', { session_id: 'a', seq: 0, offset_chars: first.next_offset })
+  assert.equal(reads, 1); assert.ok(second.json_fragment.includes('旧'))
+  f.exec.agent.session.header.cwd = '/two'
+  await assert.rejects(run(f, 'session_event_read', { session_id: 'a', seq: 0, offset_chars: first.next_offset }), /outside/)
+  assert.equal(reads, 1)
+  f.exec.agent.session.header.cwd = '/one'
+  const restarted = await run(f, 'session_event_read', { session_id: 'a', seq: 0, offset_chars: 0 })
+  assert.equal(reads, 2); assert.ok(restarted.json_fragment.includes('新'))
+  const oldDefinition = f.definitions.get('session_event_read')
+  f.dispose()
+  await oldDefinition.execute({ session_id: 'a', seq: 0, offset_chars: first.next_offset }, f.exec)
+  assert.equal(reads, 3)
+  await oldDefinition.execute({ session_id: 'a', seq: 0, offset_chars: first.next_offset }, f.exec)
+  assert.equal(reads, 4)
+})
+test('large-event entry and byte limits evict or disable preparation without cross-session reuse', async () => {
+  for (const options of [{ eventReadCacheEntries: 1 }, { eventReadCacheBytes: 0 }, { eventReadCacheEntries: 0 }]) {
+    const reads = []
+    const f = setup(provider({ readEvent: async request => { reads.push(request.sessionId); return { session: header(request.sessionId), target: { seq: 0, text: request.sessionId.repeat(3000) } } } }), { outputBytes: 1024, ...options })
+    const a = await run(f, 'session_event_read', { session_id: 'a', seq: 0 })
+    await run(f, 'session_event_read', { session_id: 'self', seq: 0 })
+    const continuation = await run(f, 'session_event_read', { session_id: 'a', seq: 0, offset_chars: a.next_offset })
+    assert.deepEqual(reads, ['a', 'self', 'a']); assert.ok(continuation.json_fragment.includes('aaa'))
+  }
+})
+test('event listing calls only public page API once with cancellation and metadata/text selection', async () => {
+  const calls = []
+  const f = setup(provider({ listEvents() { throw new Error('full list forbidden') }, filterEvents() { throw new Error('second log read forbidden') }, pageEvents: async (request, signal) => { calls.push({ request, signal }); return { session: header('a'), items: [{ seq: 2, type: 'user/message', ...(request.includeText ? { text: '中文😀' } : {}) }], nextAfterSeq: 2, capturedThroughSeq: 5 } } }))
+  const compact = await run(f, 'session_event_list', { session_id: 'a', after_seq: 0, event_types: ['user/message'], limit: 1 })
+  assert.equal(calls.length, 1); assert.equal(calls[0].signal, f.exec.signal)
+  assert.deepEqual(calls[0].request, { sessionId: 'a', afterSeq: 0, types: ['user/message'], limit: 1, includeText: true })
+  assert.equal(compact.items[0].preview, '中文😀'); assert.equal(compact.next_after_seq, 2)
+  await run(f, 'session_event_list', { session_id: 'a', view: 'metadata' })
+  assert.equal(calls[1].request.includeText, false)
+})
+test('session list forwards snapshot cursor and scope to one public page request', async () => {
+  const calls = []
+  const f = setup(provider({ listSessions() { throw new Error('full list forbidden') }, pageSessions: async (request, signal) => { calls.push({ request, signal }); return { items: [rows[0]], nextCursor: 'snapshot' } } }))
+  const first = await run(f, 'session_list', { limit: 1 })
+  assert.equal(first.next_cursor, 'snapshot'); assert.equal(Object.hasOwn(first, 'next_offset'), false)
+  await run(f, 'session_list', { limit: 1, cursor: first.next_cursor })
+  assert.equal(calls.length, 2); assert.equal(calls[1].request.cursor, 'snapshot')
+  assert.deepEqual(calls[0].request.filters, [{ kind: 'cwd', values: ['/one'] }]); assert.equal(calls[0].signal, f.exec.signal)
+})
+
+test('old query engine fails clearly at plugin load', () => {
+  assert.throws(() => setup(provider({ pageSessions: undefined })), /requires sessionQuery/)
+})
+test('event page never drops metadata records or advances a partial page', async () => {
+  const f = setup(provider({ pageEvents: async () => ({ session: header('a'), items: Array.from({ length: 100 }, (_, seq) => ({ seq, type: 'turn/start' })), nextAfterSeq: 99, capturedThroughSeq: 120 }) }), { outputBytes: 1024 })
+  await assert.rejects(run(f, 'session_event_list', { session_id: 'a', view: 'metadata', limit: 100 }), /lower limit.*same after_seq.*no partial result/)
+})
+
+test('default preparation cache reuses a one-MiB ASCII event across three pages', async () => {
+  let reads = 0
+  const f = setup(provider({ readEvent: async () => { reads++; return { session: header('a'), target: { seq: 0, text: 'x'.repeat(1024 * 1024) } } } }))
+  let offset
+  for (let page = 0; page < 3; page++) {
+    const part = await run(f, 'session_event_read', { session_id: 'a', seq: 0, ...(offset === undefined ? {} : { offset_chars: offset }) })
+    assert.equal(part.format, 'json-unicode-code-points'); assert.ok(part.next_offset > (offset ?? 0))
+    assert.ok(Buffer.byteLength(JSON.stringify(part)) <= config.outputBytes)
+    offset = part.next_offset
+  }
+  assert.equal(reads, 1)
+})
+
+test('deleted snapshot title source requires restarting listing, preserving provider error', async () => {
+  let deleted = false
+  const error = Object.assign(new Error('session no longer exists'), { code: 'SESSION_QUERY_SESSION_NOT_FOUND' })
+  const f = setup(provider({ pageSessions: async () => ({ items: [rows[0]], nextCursor: 'snapshot' }), readTitleSnapshots: async ids => deleted ? ids.map(sessionId => ({ sessionId, status: 'rejected', reason: error })) : provider().readTitleSnapshots(ids) }))
+  const first = await run(f, 'session_list', { limit: 1 }); deleted = true
+  await assert.rejects(run(f, 'session_list', { limit: 1, cursor: first.next_cursor }), failure => failure === error && /Snapshot item no longer available; start a new listing without a cursor/.test(failure.message))
 })

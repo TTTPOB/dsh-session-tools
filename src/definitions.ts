@@ -5,8 +5,8 @@ export const output = {
   schema: { type: 'object' as const, additionalProperties: true, properties: {
     items: { type: 'array' as const, description: 'Only entries on this page, never a global total.' },
     has_more: { type: 'boolean' as const, description: 'Whether a continuation exists; false at EOF.' },
-    next_cursor: { oneOf: [{ type: 'string' as const }, { type: 'null' as const }] as const, description: 'Opaque indexed-search continuation; null at EOF.' },
-    next_offset: { oneOf: [{ type: 'integer' as const }, { type: 'null' as const }] as const, description: 'Next session-list offset or Unicode-code-point event-fragment offset; null at EOF.' },
+    next_cursor: { oneOf: [{ type: 'string' as const }, { type: 'null' as const }] as const, description: 'Opaque session-list or indexed-search continuation; null at EOF.' },
+    next_offset: { oneOf: [{ type: 'integer' as const }, { type: 'null' as const }] as const, description: 'Next Unicode-code-point event-fragment offset; null at EOF.' },
     next_after_seq: { oneOf: [{ type: 'integer' as const }, { type: 'null' as const }] as const, description: 'Last raw seq seen for event-list continuation; null at EOF.' },
   } } as const,
   render: (_args: unknown, value: unknown) => [{ type: 'text' as const, text: JSON.stringify(value) }],

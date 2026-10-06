@@ -6,6 +6,8 @@ import { join, dirname } from 'node:path'
 import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
 
+const queryPackage = process.argv[2]
+if (!queryPackage) throw new Error('Pass a query 0.1.7-rc.2-fork2 tarball or immutable package URL as the first argument')
 const source = dirname(dirname(fileURLToPath(import.meta.url)))
 const root = mkdtempSync(join(tmpdir(), 'dsh-session-tools-pack-'))
 try {
@@ -15,7 +17,7 @@ try {
   execFileSync('pnpm', ['--config.auto-install-peers=false', 'add',
     join(root, `dsh-session-tools-${version}.tgz`),
     '@deepseek-ai/cordis@4.0.4', '@deepseek-ai/dsh-tools@0.1.7-rc.2',
-    '@deepseek-ai/dsh-session-query@0.1.7-rc.2', '@deepseek-ai/dsh-session@0.1.7-rc.2',
+    queryPackage, '@deepseek-ai/dsh-session@0.1.7-rc.2',
     '@deepseek-ai/dsh-session-projection@0.1.7-rc.2', '@deepseek-ai/schemastery@3.18.4',
     ...['agent','ptc-runtime','invariants','llm','scope','system-prompt','user-approval','sandbox','sandbox-policy'].map(x => `@deepseek-ai/dsh-${x}@0.1.7-rc.2`),
   ], { cwd: root, stdio: 'pipe' })

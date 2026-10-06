@@ -19,7 +19,7 @@ test('real Cordis Loader mounts built ESM through cordis.yml then disposes tools
     ctx.baseUrl = pathToFileURL(root).href + '/'
     ctx.provide('tools', { register(definition) { tools.set(definition.name, definition); return () => tools.delete(definition.name) } })
     ctx.provide('sessionProjections', { stateOf: () => ({ lastStepStartSeq: 3 }) })
-    ctx.provide('sessionQuery', { listSessions: async () => [] })
+    ctx.provide('sessionQuery', { pageSessions: async () => ({ items: [] }), pageEvents: async () => ({ session: {}, items: [], capturedThroughSeq: -1 }) })
     await ctx.plugin(Loader)
     ctx.loader.builtins.include = Include
     ctx.loader.internal = { version: 'v2', async import(specifier) {
@@ -30,6 +30,8 @@ test('real Cordis Loader mounts built ESM through cordis.yml then disposes tools
     await ctx.loader.await()
     assert.equal(tools.size, 7)
     assert.equal(typeof tools.get('session_search').execute, 'function')
+    const listed = await tools.get('session_list').execute({}, { signal: new AbortController().signal, agent: { session: { id: 'caller', header: { cwd: '/one' } } } })
+    assert.deepEqual(listed, { items: [], has_more: false, next_cursor: null })
     await ctx.fiber.dispose()
     assert.equal(tools.size, 0)
   } finally { await rm(root, { recursive: true, force: true }) }

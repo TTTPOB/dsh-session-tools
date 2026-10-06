@@ -1,72 +1,79 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { defineTool, type ToolRunContext } from '@deepseek-ai/dsh-tools'
-import { SessionSeq, type SessionId } from '@deepseek-ai/dsh-session'
-import type { SessionRecord } from '@deepseek-ai/dsh-session-query'
-import { integer, bounded, trim, record, caller, authorize, safeTrace, hiddenDescendant, fitsOrThrow, type JsonValue } from './shared.js'
+import { SessionSeq, type SessionId, type SessionEventType } from '@deepseek-ai/dsh-session'
+import type { SessionRecord, SessionLineageNode } from '@deepseek-ai/dsh-session-query'
+import { integer, bounded, trim, record, caller, authorize, hiddenDescendant, fitsOrThrow, type JsonValue } from './shared.js'
 import { output, scopeParam, targetParam, limitParam, call } from './definitions.js'
 
 /** Build exact-read and trace tool definitions against public services. */
 export function readTools(ctx: Context, options: {
   previewChars: number
   outputBytes: number
+  eventReadCacheEntries: number
+  eventReadCacheBytes: number
+  titles: (records: readonly SessionRecord[], exec: ToolRunContext, access: ReturnType<typeof caller>) => Promise<Map<string, { title: string; cached?: true }>>
   size: (limit?: number) => number
   target: (id: string, exec: ToolRunContext, access: ReturnType<typeof caller>) => Promise<SessionId>
 }) {
   const { previewChars, outputBytes, size, target } = options
   const tools: Array<Parameters<typeof ctx.tools.register>[0]> = []
+  type Prepared = { session: Awaited<ReturnType<typeof ctx.sessionQuery.readEvent>>['session']; points: string[]; bytes: number }
+  const prepared = new Map<string, Prepared>()
+  let cacheBytes = 0
+  let disposed = false
+  const remove = (key: string) => { const old = prepared.get(key); if (old) cacheBytes -= old.bytes; prepared.delete(key) }
+  const retain = (key: string, value: Prepared) => {
+    remove(key)
+    if (disposed || options.eventReadCacheEntries === 0 || value.bytes > options.eventReadCacheBytes) return
+    while (prepared.size >= options.eventReadCacheEntries || cacheBytes + value.bytes > options.eventReadCacheBytes) remove(prepared.keys().next().value!)
+    prepared.set(key, value); cacheBytes += value.bytes
+  }
     tools.push(defineTool({ name: 'session_event_list', description: 'List every raw event including structural events, in ascending seq order; empty EOF page is normal.', parameters: { ...targetParam, scope: scopeParam, ...limitParam, after_seq: { type: 'integer', description: 'Last seen seq; omit to start at zero.' }, event_types: { type: 'array', items: { type: 'string' }, description: 'Explicit event type filter.' }, view: { type: 'string', enum: ['compact', 'metadata'], description: 'Default compact.' } }, output, presentCall: call('List events'), async execute(args, exec) {
       const access = caller(exec, args.scope); const sessionId = await target(args.session_id, exec, access)
-      const records = await ctx.sessionQuery.listEvents(sessionId)
+      const afterSeq = args.after_seq === undefined ? undefined : SessionSeq(integer(args.after_seq, 'after_seq', 0, Number.MAX_SAFE_INTEGER))
       exec.signal.throwIfAborted()
-      const start = args.after_seq === undefined ? 0 : integer(args.after_seq, 'after_seq', 0, Number.MAX_SAFE_INTEGER) + 1
-      const types = args.event_types === undefined ? undefined : new Set(args.event_types)
-      const items: JsonValue[] = []
-      let pos = records.findIndex(item => item.seq >= start)
-      if (pos < 0) pos = records.length
-      const selected = size(args.limit)
-      const eligible = records.slice(pos).filter(item => !types || types.has(item.type)).slice(0, selected)
-      let preview = new Map<number, string>()
-      if (args.view !== 'metadata' && eligible.length && previewChars > 0) {
-        const docs = await ctx.sessionQuery.filterEvents(sessionId, [{ kind: 'seq', from: eligible[0]!.seq, to: eligible.at(-1)!.seq }])
-        exec.signal.throwIfAborted()
-        preview = new Map(docs.map(doc => [doc.seq, doc.text]))
+      const page = await ctx.sessionQuery.pageEvents({ sessionId, ...(afterSeq === undefined ? {} : { afterSeq }), ...(args.event_types === undefined ? {} : { types: args.event_types as SessionEventType[] }), limit: size(args.limit), includeText: args.view !== 'metadata' && previewChars > 0 }, exec.signal)
+      exec.signal.throwIfAborted()
+      authorize(page.session, access)
+      const items: JsonValue[] = page.items.map(item => ({ seq: item.seq, type: item.type, ...(args.view === 'metadata' || item.text === undefined ? {} : trim(item.text, previewChars)) }))
+      const result = { session_id: sessionId, items, has_more: page.nextAfterSeq !== undefined, next_after_seq: page.nextAfterSeq ?? null }
+      if (!bounded(result, outputBytes)) {
+        for (let i = 0; i < items.length; i++) {
+          const item = page.items[i]!
+          if (args.view !== 'metadata' && item.text !== undefined) items[i] = { seq: item.seq, type: item.type, preview_omitted: true, text_truncated: true }
+        }
       }
-      let lastSeq = args.after_seq ?? null
-      for (; pos < records.length && items.length < selected; pos++) {
-        const item = records[pos]!
-        if (types && !types.has(item.type)) { lastSeq = item.seq; continue }
-        const text = preview.get(item.seq)
-        let entry: JsonValue = args.view === 'metadata' ? { seq: item.seq, type: item.type } : {
-          seq: item.seq, type: item.type,
-          ...(text === undefined ? {} : trim(text, previewChars)),
-        }
-        let result = { session_id: sessionId, items: [...items, entry], has_more: pos + 1 < records.length, next_after_seq: item.seq }
-        if (!bounded(result, outputBytes) && text !== undefined) {
-          entry = { seq: item.seq, type: item.type, preview_omitted: true, text_truncated: true }
-          result = { session_id: sessionId, items: [...items, entry], has_more: pos + 1 < records.length, next_after_seq: item.seq }
-        }
-        if (!bounded(result, outputBytes)) {
-          if (!items.length) throw new Error('outputBytes cannot fit one event record')
-          break
-        }
-        items.push(entry); lastSeq = item.seq
-      }
-      return fitsOrThrow({ session_id: sessionId, items, has_more: pos < records.length, next_after_seq: pos < records.length ? lastSeq : null }, outputBytes)
+      if (!bounded(result, outputBytes)) throw new Error('Event list page exceeds outputBytes; lower limit and retry from the same after_seq, or increase configured outputBytes; no partial result was returned')
+      return result
     } }))
     tools.push(defineTool({ name: 'session_event_read', description: 'Read small raw events directly; large events return readable JSON fragments continued by Unicode code-point offset_chars.', parameters: { ...targetParam, scope: scopeParam, seq: { type: 'integer', required: true }, offset_chars: { type: 'integer', description: 'Unicode code-point offset into serialized JSON, default zero.' } }, output, presentCall: call('Read event'), async execute(args, exec) {
       const access = caller(exec, args.scope); const sessionId = await target(args.session_id, exec, access)
       const seq = integer(args.seq, 'seq', 0, Number.MAX_SAFE_INTEGER)
-      const window = await ctx.sessionQuery.readEvent({ sessionId, seq: SessionSeq(seq) }, exec.signal)
-      exec.signal.throwIfAborted()
-      authorize(window.session, access)
-      const json = JSON.stringify(window.target)
-      const raw = { session_id: sessionId, seq, format: 'event-json', event: JSON.parse(JSON.stringify(window.target)) as JsonValue, has_more: false, next_offset: null }
-      if (bounded(raw, outputBytes) && args.offset_chars === undefined) return raw
-      const points = Array.from(json)
       const offset = integer(args.offset_chars, 'offset_chars', 0, Number.MAX_SAFE_INTEGER)
+      const key = JSON.stringify([sessionId, seq])
+      // Continuations use the prepared raw-seq snapshot; restarting refreshes it.
+      let value = offset > 0 ? prepared.get(key) : undefined
+      if (!value) {
+        remove(key)
+        const window = await ctx.sessionQuery.readEvent({ sessionId, seq: SessionSeq(seq) }, exec.signal)
+        exec.signal.throwIfAborted()
+        authorize(window.session, access)
+        const json = JSON.stringify(window.target)
+        const raw = { session_id: sessionId, seq, format: 'event-json', event: JSON.parse(json) as JsonValue, has_more: false, next_offset: null }
+        if (args.offset_chars === undefined && bounded(raw, outputBytes)) return raw
+        const points = Array.from(json)
+        // Account for serialized text, point strings and array slots conservatively.
+        value = { session: window.session, points, bytes: Buffer.byteLength(json) + json.length * 2 + points.length * 32 }
+        retain(key, value)
+      } else {
+        prepared.delete(key); prepared.set(key, value)
+      }
+      authorize(value.session, access)
+      exec.signal.throwIfAborted()
+      const { points } = value
       if (offset > points.length) throw new RangeError('offset_chars exceeds JSON Unicode code point length')
       const base = { session_id: sessionId, seq, format: 'json-unicode-code-points', offset_chars: offset, total_chars: points.length }
-      let low = 0, high = points.length - offset
+      let low = 0, high = Math.min(points.length - offset, outputBytes)
       while (low < high) {
         const mid = Math.ceil((low + high) / 2)
         const probe = { ...base, json_fragment: points.slice(offset, offset + mid).join(''), has_more: offset + mid < points.length, next_offset: offset + mid < points.length ? offset + mid : null }
@@ -83,9 +90,20 @@ export function readTools(ctx: Context, options: {
       authorize(trace.target.header, access)
       const ancestors: SessionRecord[] = []
       for (const item of trace.ancestors) { if (access.project && item.header.cwd !== access.cwd) break; ancestors.push(item) }
-      const descendants = trace.descendants.map(node => safeTrace(node, access)).filter(node => node !== null)
+      const visible: SessionRecord[] = [trace.target, ...ancestors]
+      const collect = (nodes: readonly SessionLineageNode[]): SessionLineageNode[] => nodes.flatMap(node => {
+        if (access.project && node.session.header.cwd !== access.cwd) return []
+        visible.push(node.session)
+        return [{ session: node.session, descendants: collect(node.descendants) }]
+      })
+      const nodes = collect(trace.descendants)
+      if (!access.project && trace.complete) visible.push(trace.root)
+      const names = await options.titles(visible, exec, access)
+      const summary = (item: SessionRecord) => record(item, names.get(item.header.id)?.title, !access.project, names.get(item.header.id)?.cached)
+      const render = (node: SessionLineageNode): JsonValue => ({ session: summary(node.session), descendants: node.descendants.map(render) })
+      const descendants = nodes.map(render)
       const scope_limited = access.project && (ancestors.length !== trace.ancestors.length || hiddenDescendant(trace.descendants, access.cwd!))
-      return fitsOrThrow({ target: record(trace.target, undefined, !access.project), ancestors: ancestors.map(item => record(item, undefined, !access.project)), descendants, scope_limited, complete: trace.complete && !scope_limited, ...(access.project ? {} : trace.complete ? { root: record(trace.root, undefined, true) } : { unresolvedParentId: trace.unresolvedParentId }) }, outputBytes)
+      return fitsOrThrow({ target: summary(trace.target), ancestors: ancestors.map(summary), descendants, scope_limited, complete: trace.complete && !scope_limited, ...(access.project ? {} : trace.complete ? { root: summary(trace.root) } : { unresolvedParentId: trace.unresolvedParentId }) }, outputBytes)
     } }))
     tools.push(defineTool({ name: 'session_event_trace', description: 'Trace direct event replacement and citation relationships without omitting links.', parameters: { ...targetParam, scope: scopeParam, seq: { type: 'integer', required: true } }, output, presentCall: call('Trace event'), async execute(args, exec) {
       const access = caller(exec, args.scope); const sessionId = await target(args.session_id, exec, access)
@@ -95,5 +113,5 @@ export function readTools(ctx: Context, options: {
       authorize(trace.session, access)
       return fitsOrThrow({ session_id: sessionId, target: { ...trace.target }, replacedBy: trace.replacedBy ?? null, replacementChain: trace.replacementChain, replacedEventSeqs: trace.replacedEventSeqs, sourceEventSeqs: trace.sourceEventSeqs, derivedEventSeqs: trace.derivedEventSeqs }, outputBytes)
     } }))
-  return tools
+  return { tools, dispose() { disposed = true; prepared.clear(); cacheBytes = 0 } }
 }
