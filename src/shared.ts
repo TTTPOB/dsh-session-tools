@@ -16,7 +16,7 @@ export function bounded(value: object, bytes: number): boolean { return Buffer.b
 /** Trim preview text by Unicode code points. */
 export function trim(text: string, chars: number) { const points = Array.from(text); return { preview: points.slice(0, chars).join(''), text_truncated: points.length > chars } }
 /** Project compact session metadata without revealing parent identifiers. */
-export function record(record: SessionRecord, title?: string, all = false) { return { session_id: record.header.id, title: title ?? '(untitled)', ...(all ? { cwd: record.header.cwd ?? null } : {}) } }
+export function record(record: SessionRecord, title?: string, all = false, titleCached = false) { return { session_id: record.header.id, title: title ?? '(untitled)', ...(titleCached ? { title_cached: true } : {}), ...(all ? { cwd: record.header.cwd ?? null } : {}) } }
 /** Resolve exact project authorization from the calling agent session. */
 export function caller(exec: ToolRunContext, scope: string | undefined): { cwd?: string; id: string; project: boolean } {
   if (!exec.agent) throw new Error('An agent-bound session is required')

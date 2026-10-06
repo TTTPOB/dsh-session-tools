@@ -1,9 +1,10 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-session-projection'
+import type {} from '@deepseek-ai/dsh-session-projection-cache'
 import Schema from '@deepseek-ai/schemastery'
 import { defineTool, type ToolRunContext } from '@deepseek-ai/dsh-tools'
 import { SessionId, SessionSeq } from '@deepseek-ai/dsh-session'
-import type { SessionSearchCursor } from '@deepseek-ai/dsh-session-query'
+import type { SessionRecord, SessionSearchCursor } from '@deepseek-ai/dsh-session-query'
 
 import { integer, bounded, trim, record, caller, authorize, fitsOrThrow, searchError } from './shared.js'
 import { output, scopeParam, targetParam, limitParam, call } from './definitions.js'
@@ -41,15 +42,32 @@ export function apply(ctx: Context, config: Config): void {
     authorize(match.header, access)
     return sessionId
   }
-  const titles = async (ids: readonly ReturnType<typeof id>[], exec: ToolRunContext, access: ReturnType<typeof caller>) => {
-    if (!ids.length) return new Map<string, string>()
-    const results = await ctx.sessionQuery.readTitleSnapshots(ids, exec.signal)
+  const titles = async (records: readonly SessionRecord[], exec: ToolRunContext, access: ReturnType<typeof caller>) => {
+    const map = new Map<string, { title: string; cached?: true }>()
+    if (!records.length) return map
+    const cache = ctx.get('sessionProjectionCache')
+    const sessions = ctx.get('sessions')
+    const unresolved: ReturnType<typeof id>[] = []
+    for (const item of records) {
+      authorize(item.header, access)
+      // Live results retain the exact query read, never a stale checkpoint hint.
+      if (item.live || sessions?.get(item.header.id) !== undefined) {
+        unresolved.push(item.header.id)
+        continue
+      }
+      let title = cache?.cachedSnapshot(item.header, ['title'])?.values.title
+      if (title === undefined) title = cache?.cachedPredecessorTitle(item.header)?.values.title
+      if (title === undefined) unresolved.push(item.header.id)
+      else map.set(item.header.id, { title: trim(title ?? '(untitled)', previewChars).preview, cached: true })
+    }
     exec.signal.throwIfAborted()
-    const map = new Map<string, string>()
+    if (!unresolved.length) return map
+    const results = await ctx.sessionQuery.readTitleSnapshots(unresolved, exec.signal)
+    exec.signal.throwIfAborted()
     for (const result of results) {
       if (result.status === 'rejected') throw result.reason
       authorize(result.value.session, access)
-      map.set(result.sessionId, trim(result.value.title?.title ?? '(untitled)', previewChars).preview)
+      map.set(result.sessionId, { title: trim(result.value.title?.title ?? '(untitled)', previewChars).preview })
     }
     return map
   }
@@ -57,7 +75,7 @@ export function apply(ctx: Context, config: Config): void {
   ctx.effect(() => {
     const disposers: Array<() => void> = []
     const add = (definition: Parameters<typeof ctx.tools.register>[0]) => { try { disposers.push(ctx.tools.register(definition)) } catch (error) { for (const dispose of disposers.reverse()) dispose(); throw error } }
-    add(defineTool({ name: 'session_list', description: 'List session metadata. project uses exact caller cwd; all uses the current provider only.', parameters: { scope: scopeParam, ...limitParam, offset: { type: 'integer', description: 'Number of sessions to skip (default 0).' } }, output, presentCall: call('List sessions'), async execute(args, exec) {
+    add(defineTool({ name: 'session_list', description: 'List session metadata. Titles are display hints; title_cached:true marks cached hints that may lag renames. project uses exact caller cwd; all uses the current provider only.', parameters: { scope: scopeParam, ...limitParam, offset: { type: 'integer', description: 'Number of sessions to skip (default 0).' } }, output, presentCall: call('List sessions'), async execute(args, exec) {
       const access = caller(exec, args.scope)
       const records = await ctx.sessionQuery.listSessions(exec.signal)
       exec.signal.throwIfAborted()
@@ -65,10 +83,10 @@ export function apply(ctx: Context, config: Config): void {
       const start = integer(args.offset, 'offset', 0, Number.MAX_SAFE_INTEGER)
       const requested = size(args.limit)
       const selected = visible.slice(start, start + requested)
-      const names = await titles(selected.map(item => item.header.id), exec, access)
+      const names = await titles(selected, exec, access)
       const items: ReturnType<typeof record>[] = []
       for (const item of selected) {
-        const next = record(item, names.get(item.header.id), !access.project)
+        const next = record(item, names.get(item.header.id)?.title, !access.project, names.get(item.header.id)?.cached)
         const candidate = { items: [...items, next], has_more: start + items.length + 1 < visible.length, next_offset: start + items.length + 1 < visible.length ? start + items.length + 1 : null }
         if (!bounded(candidate, outputBytes)) break
         items.push(next)
@@ -79,7 +97,7 @@ export function apply(ctx: Context, config: Config): void {
       const result = { items, has_more: start + items.length < visible.length, next_offset: start + items.length < visible.length ? start + items.length : null }
       return fitsOrThrow(result, outputBytes)
     } }))
-    add(defineTool({ name: 'session_search', description: 'Indexed FTS token search across sessions; not arbitrary substring matching. Never scans logs. Excludes caller session by default.', parameters: { query: { type: 'string', required: true }, scope: scopeParam, ...limitParam, cursor: { type: 'string', description: 'Opaque continuation cursor.' }, include_current: { type: 'boolean', description: 'Include current session (default false).' } }, output, timeoutMs: searchTimeoutMs, presentCall: call('Search sessions'), async execute(args, exec) {
+    add(defineTool({ name: 'session_search', description: 'Indexed FTS token search across sessions; not arbitrary substring matching. Titles are display hints; title_cached:true marks cached hints that may lag renames. Never scans logs for search. Excludes caller session by default.', parameters: { query: { type: 'string', required: true }, scope: scopeParam, ...limitParam, cursor: { type: 'string', description: 'Opaque continuation cursor.' }, include_current: { type: 'boolean', description: 'Include current session (default false).' } }, output, timeoutMs: searchTimeoutMs, presentCall: call('Search sessions'), async execute(args, exec) {
       const access = caller(exec, args.scope)
       const query = args.query.trim(); if (!query) throw new Error('query must not be empty')
       const requested = size(args.limit)
@@ -89,8 +107,8 @@ export function apply(ctx: Context, config: Config): void {
       catch (error) { searchError(error) }
       exec.signal.throwIfAborted()
       const hits = page.items.filter(hit => args.include_current || hit.header.id !== access.id)
-      const names = await titles(hits.map(hit => hit.header.id), exec, access)
-      const items = hits.map(hit => ({ ...record(hit, names.get(hit.header.id), !access.project), seq: hit.bestMatch.seq, type: hit.bestMatch.type, snippet: trim(hit.bestMatch.snippet, previewChars).preview, snippet_truncated: trim(hit.bestMatch.snippet, previewChars).text_truncated }))
+      const names = await titles(hits, exec, access)
+      const items = hits.map(hit => ({ ...record(hit, names.get(hit.header.id)?.title, !access.project, names.get(hit.header.id)?.cached), seq: hit.bestMatch.seq, type: hit.bestMatch.type, snippet: trim(hit.bestMatch.snippet, previewChars).preview, snippet_truncated: trim(hit.bestMatch.snippet, previewChars).text_truncated }))
       const result = { items, has_more: !!page.nextCursor, next_cursor: page.nextCursor ?? null }
       if (!bounded(result, outputBytes)) throw new Error('Indexed search page exceeds outputBytes; lower limit and start a new search without a cursor, or increase configured outputBytes; no partial result was returned')
       return result

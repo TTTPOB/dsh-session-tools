@@ -6,7 +6,7 @@ const config = { pageSize: 30, maxPageSize: 100, previewChars: 240, outputBytes:
 function setup(query, options = {}) {
   const definitions = new Map()
   let cleanup
-  const ctx = { sessionQuery: query, sessionProjections: { stateOf: () => ({ lastStepStartSeq: 3 }) }, tools: { register(tool) { definitions.set(tool.name, tool); return () => definitions.delete(tool.name) } }, effect(fn) { cleanup = fn() } }
+  const ctx = { get(name) { return this[name] }, sessionQuery: query, sessionProjections: { stateOf: () => ({ lastStepStartSeq: 3 }) }, tools: { register(tool) { definitions.set(tool.name, tool); return () => definitions.delete(tool.name) } }, effect(fn) { cleanup = fn() } }
   apply(ctx, { ...config, ...options })
   const controller = new AbortController()
   const exec = { signal: controller.signal, agent: { session: { id: 'self', header: { cwd: '/one' } } } }
@@ -99,6 +99,112 @@ test('titles batch once and compact records omit per-item metadata in project sc
   assert.equal(ids.length, 1); assert.equal(ids[0].length, 2)
   assert.deepEqual(Object.keys(result.items[0]), ['session_id', 'title'])
   assert.equal(result.items[0].title, '项目标题')
+})
+test('cached current title, empty string and explicit null avoid exact title reads', async () => {
+  for (const title of ['Checkpoint title', '', null]) {
+    const f = setup(provider({ readTitleSnapshots: async () => { throw new Error('exact title read forbidden') } }))
+    const seen = []
+    f.ctx.sessionProjectionCache = {
+      cachedSnapshot(meta, keys) { seen.push(meta); assert.deepEqual(keys, ['title']); return { values: { title } } },
+      cachedPredecessorTitle() { throw new Error('usable current title must win') },
+    }
+    const result = await run(f, 'session_list', {})
+    assert.deepEqual(seen, [rows[0].header, rows[2].header])
+    assert.deepEqual(result.items, ['a', 'self'].map(session_id => ({ session_id, title: title ?? '(untitled)', title_cached: true })))
+  }
+})
+test('missing current title uses predecessor hint, including explicit null', async () => {
+  const f = setup(provider({ readTitleSnapshots: async () => { throw new Error('exact title read forbidden') } }))
+  const seen = []
+  f.ctx.sessionProjectionCache = {
+    cachedSnapshot: () => ({ values: {} }),
+    cachedPredecessorTitle(meta) { seen.push(meta); return { values: { title: meta.id === 'a' ? 'Older title' : null } } },
+  }
+  assert.deepEqual((await run(f, 'session_list', {})).items, [
+    { session_id: 'a', title: 'Older title', title_cached: true },
+    { session_id: 'self', title: '(untitled)', title_cached: true },
+  ])
+  assert.deepEqual(seen, [rows[0].header, rows[2].header])
+})
+test('unusable cache snapshots without title keys fall back to the exact batch', async () => {
+  const batches = []
+  const f = setup(provider({ readTitleSnapshots: async ids => { batches.push(ids); return provider().readTitleSnapshots(ids) } }))
+  f.ctx.sessionProjectionCache = { cachedSnapshot: () => ({ values: {} }), cachedPredecessorTitle: () => ({ values: {} }) }
+  const result = await run(f, 'session_list', {})
+  assert.deepEqual(batches, [['a', 'self']])
+  assert.deepEqual(result.items, ['a', 'self'].map(session_id => ({ session_id, title: 'Test title' })))
+})
+test('mixed list and search hints batch only unresolved ids and omit fallback flags', async () => {
+  const batches = []
+  const f = setup(provider({
+    readTitleSnapshots: async ids => { batches.push(ids); return provider().readTitleSnapshots(ids) },
+    searchSessions: async () => ({ items: [rows[0], rows[2]].map(row => ({ ...row, bestMatch: { seq: 1, type: 'user/message', snippet: 'matched' } })), nextCursor: 'next' }),
+  }))
+  f.ctx.sessionProjectionCache = {
+    cachedSnapshot: meta => meta.id === 'a' ? { values: { title: 'Cached' } } : undefined,
+    cachedPredecessorTitle: () => undefined,
+  }
+  const list = await run(f, 'session_list', {})
+  const search = await run(f, 'session_search', { query: 'matched', include_current: true })
+  for (const page of [list, search]) {
+    assert.equal(page.items[0].title_cached, true); assert.equal(page.items[0].title, 'Cached')
+    assert.equal(Object.hasOwn(page.items[1], 'title_cached'), false); assert.equal(page.items[1].title, 'Test title')
+  }
+  assert.deepEqual(batches, [['self'], ['self']])
+  assert.deepEqual(search.items.map(item => [item.session_id, item.seq, item.snippet]), [['a', 1, 'matched'], ['self', 1, 'matched']])
+  assert.equal(search.next_cursor, 'next')
+})
+test('live record and newly attached Session skip stale hints and use exact title reads', async () => {
+  const batches = []
+  const f = setup(provider({
+    listSessions: async () => [{ ...rows[0], live: true }, rows[2]],
+    readTitleSnapshots: async ids => { batches.push(ids); return provider().readTitleSnapshots(ids) },
+  }))
+  f.ctx.sessions = { get: id => id === 'self' ? f.exec.agent.session : undefined }
+  f.ctx.sessionProjectionCache = { cachedSnapshot() { throw new Error('stale hint forbidden for live Session') } }
+  const result = await run(f, 'session_list', {})
+  assert.deepEqual(batches, [['a', 'self']])
+  assert.equal(result.items.some(item => Object.hasOwn(item, 'title_cached')), false)
+})
+test('cache cannot bypass search header or fallback title authorization', async () => {
+  let consulted = false
+  const f = setup(provider({ searchSessions: async () => ({ items: [{ ...rows[1], bestMatch: { seq: 1, type: 'user/message', snippet: 'foreign' } }] }) }))
+  f.ctx.sessionProjectionCache = { cachedSnapshot() { consulted = true; return { values: { title: 'Foreign' } } } }
+  await assert.rejects(run(f, 'session_search', { query: 'foreign' }), /outside the caller project/)
+  assert.equal(consulted, false)
+  assert.deepEqual((await run(f, 'session_list', {})).items.map(item => item.session_id), ['a', 'self'])
+  const fallback = setup(provider({ readTitleSnapshots: async ids => ids.map(sessionId => ({ sessionId, status: 'fulfilled', value: { session: header(sessionId, '/two'), title: null } })) }))
+  await assert.rejects(run(fallback, 'session_list', {}), /outside the caller project/)
+})
+test('cache read failures and exact title provider rejections propagate unchanged', async () => {
+  const error = new Error('cache unavailable')
+  for (const method of ['cachedSnapshot', 'cachedPredecessorTitle']) {
+    const f = setup(provider({ readTitleSnapshots: async () => { throw new Error('silent fallback forbidden') } }))
+    f.ctx.sessionProjectionCache = { cachedSnapshot: () => undefined, [method]() { throw error } }
+    await assert.rejects(run(f, 'session_list', {}), e => e === error)
+  }
+  const f = setup(provider({ readTitleSnapshots: async ids => ids.map(sessionId => ({ sessionId, status: 'rejected', reason: error })) }))
+  await assert.rejects(run(f, 'session_list', {}), e => e === error)
+})
+test('complete list and search output budgets count cached flags', async () => {
+  const f = setup(provider({
+    listSessions: async () => [rows[0], rows[2]],
+    readTitleSnapshots: async () => { throw new Error('exact title read forbidden') },
+    searchSessions: async () => ({ items: [{ ...rows[0], bestMatch: { seq: 1, type: 'user/message', snippet: 'hit' } }] }),
+  }), { previewChars: 1000 })
+  f.ctx.sessionProjectionCache = { cachedSnapshot: () => ({ values: { title: '中'.repeat(300) } }) }
+  const list = await run(f, 'session_list', {})
+  const listBudget = Buffer.byteLength(JSON.stringify({ ...list, items: list.items.map(({ title_cached, ...item }) => item) }))
+  const limitedList = setup(f.ctx.sessionQuery, { previewChars: 1000, outputBytes: listBudget })
+  limitedList.ctx.sessionProjectionCache = f.ctx.sessionProjectionCache
+  const partial = await run(limitedList, 'session_list', {})
+  assert.equal(partial.items.length, 1); assert.equal(partial.has_more, true); assert.equal(partial.next_offset, 1)
+  assert.ok(Buffer.byteLength(JSON.stringify(partial)) <= listBudget)
+  const search = await run(f, 'session_search', { query: 'hit' })
+  const searchBudget = Buffer.byteLength(JSON.stringify({ ...search, items: search.items.map(({ title_cached, ...item }) => item) }))
+  const limitedSearch = setup(f.ctx.sessionQuery, { previewChars: 1000, outputBytes: searchBudget })
+  limitedSearch.ctx.sessionProjectionCache = f.ctx.sessionProjectionCache
+  await assert.rejects(run(limitedSearch, 'session_search', { query: 'hit' }), /no partial result/)
 })
 test('filtered event previews use selected seq range and count Chinese code points', async () => {
   const ranges = []
