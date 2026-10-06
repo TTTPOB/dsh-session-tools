@@ -1,0 +1,51 @@
+name: Session tools release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: session-tools-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.24.0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Validate tag and install pinned dependencies
+        run: |
+          test "$GITHUB_REF_NAME" = "v$(node -p 'JSON.parse(require("fs").readFileSync("package.json")).version')"
+          pnpm install --frozen-lockfile
+      - name: Build and test the consumer
+        run: pnpm --config.verify-deps-before-run=false check
+      - name: Verify packaged entry and create asset
+        run: |
+          node tests/pack-smoke.mjs https://github.com/TTTPOB/deepseek-harness/releases/download/daily-driver-v0.1.7-rc.2-fork12/deepseek-ai-dsh-session-query-0.1.7-rc.2-fork2.tgz
+          pnpm --config.verify-deps-before-run=false pack --pack-destination dist/release
+          (cd dist/release && sha256sum dsh-session-tools-*.tgz > SHA256SUMS)
+      - name: Publish immutable assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            echo 'Release already exists; refusing to overwrite.' >&2
+            exit 1
+          fi
+          version=$(node -p 'JSON.parse(require("fs").readFileSync("package.json")).version')
+          gh release create "$GITHUB_REF_NAME" "dist/release/dsh-session-tools-$version.tgz" dist/release/SHA256SUMS --verify-tag --title "$GITHUB_REF_NAME" --notes 'Session browsing P1/P2 repairs: stable listing cursors, visible trace titles, single-observation event pages and reusable Unicode event fragments. Requires session-query fork2 and SQLite fork5 from daily-driver fork12. Update consuming profiles using Host-provided shared peers, acknowledge the exact plugin version exemption through dsh plugin allow-version, and restart to activate. Indexed search behavior is unchanged.'
