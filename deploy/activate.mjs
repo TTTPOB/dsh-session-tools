@@ -7,9 +7,11 @@ import { resolve, join, dirname, isAbsolute } from 'node:path'
 
 const args = process.argv.slice(2)
 const checkOnly = args[0] === '--check-only'
-const [home, tarball, hostManifest, profileNames = 'web'] = checkOnly ? args.slice(1) : args
-if (!home || !tarball || !isAbsolute(tarball) || !existsSync(tarball) || !hostManifest || !isAbsolute(hostManifest) || !existsSync(hostManifest)) {
-  console.error('Usage: node activate.mjs [--check-only] /absolute/DSH_HOME /absolute/dsh-session-tools.tgz /absolute/installed-host/package.json [web,headless]')
+const [home, source, version, hostManifest, profileNames = 'web'] = checkOnly ? args.slice(1) : args
+const releaseSource = /^https:\/\/github\.com\/[^/?#]+\/[^/?#]+\/releases\/download\/[^/?#]+\/[^/?#]+\.tgz$/.test(source ?? '')
+const localSource = source && isAbsolute(source) && existsSync(source) && source.endsWith('.tgz')
+if (!home || (!releaseSource && !localSource) || !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(version ?? '') || !hostManifest || !isAbsolute(hostManifest) || !existsSync(hostManifest)) {
+  console.error('Usage: node activate.mjs [--check-only] /absolute/DSH_HOME <exact-GitHub-Release-tgz-URL|/absolute/test.tgz> <exact-version> /absolute/installed-host/package.json [web,headless]')
   process.exit(2)
 }
 const profiles = profileNames.split(',')
@@ -29,7 +31,7 @@ const parse = path => JSON.parse(read(path))
 
 try {
   if (root === '/' || !lstatSync(root).isDirectory()) fail('DSH_HOME must be an existing directory')
-  const tarballPath = realpathSync(tarball)
+  const tarballPath = localSource ? realpathSync(source) : undefined
   // pnpm exposes a top-level link; its real package directory owns the Host dependencies.
   const hostAnchor = realpathSync(hostManifest)
   const hostReq = createRequire(hostAnchor)
@@ -38,22 +40,25 @@ try {
   const { Context } = await import(pathToFileURL(hostReq.resolve('@deepseek-ai/cordis')).href)
   const data = manifests.map(path => ({ path, json: parse(path) }))
   const web = data.find(item => item.path === webManifest).json
-  const oldPatch = read(patch)
-  if (!oldPatch.endsWith('\n')) fail('Home patch must end with a newline')
+  const oldPatch = checkOnly && !existsSync(patch) ? '' : read(patch)
+  if (!checkOnly && !oldPatch.endsWith('\n')) fail('Home patch must end with a newline')
   const newRowPresent = /^\s*- id: session-tools\s*$/m.test(oldPatch) || /^\s*name: dsh-session-tools\s*$/m.test(oldPatch)
   const oldBundlePresent = web.dsh?.profile?.bundles?.includes('dsh-session-search-pro')
-  if (newRowPresent && oldBundlePresent) fail('New global plugin and old Web bundle are both declared; inspect config before retrying')
+  if (!checkOnly && newRowPresent && oldBundlePresent) fail('New global plugin and old Web bundle are both declared; inspect config before retrying')
   if (newRowPresent && !checkOnly) fail('Plugin already declared in home patch; no changes made')
-  if (!newRowPresent && !oldBundlePresent) fail('Old Web bundle missing; inspect config before retrying')
-  if (oldBundlePresent && !web.dependencies?.['dsh-session-search-pro']) fail('Old Web dependency missing; inspect config before retrying')
+  if (!checkOnly && !newRowPresent && !oldBundlePresent) fail('Old Web bundle missing; inspect config before retrying')
+  if (!checkOnly && oldBundlePresent && !web.dependencies?.['dsh-session-search-pro']) fail('Old Web dependency missing; inspect config before retrying')
   for (const { path, json } of data) {
     const profile = dirname(path)
     const deps = json.dependencies || {}
     const requested = deps[plugin]
-    if (!requested?.startsWith('file:')) fail(`${profile}: plugin must be an explicit file: tarball dependency`)
-    if (realpathSync(resolve(profile, requested.slice(5))) !== tarballPath) fail(`${profile}: plugin dependency specifies a different tarball`)
+    if (releaseSource) {
+      if (requested !== source) fail(`${profile}: plugin dependency specifies a different Release source`)
+    } else {
+      if (!requested?.startsWith('file:') || realpathSync(resolve(profile, requested.slice(5))) !== tarballPath) fail(`${profile}: plugin dependency specifies a different test tarball`)
+    }
     const req = createRequire(path)
-    for (const name of [plugin, ...shared]) {
+    for (const name of [plugin, ...(checkOnly ? [] : shared)]) {
       if (!deps[name]) fail(`${profile}: missing explicit dependency ${name}; reconcile shared dependencies first`)
       try { req.resolve(name) } catch { fail(`${profile}: cannot resolve built entry of ${name}`) }
     }
@@ -62,7 +67,8 @@ try {
       entry = realpathSync(req.resolve(plugin))
       pluginManifest = parse(join(profile, 'node_modules', plugin, 'package.json'))
     } catch { fail(`${profile}: cannot locate built plugin entry and manifest`) }
-    if (entry.endsWith('.ts')) fail(`${profile}: plugin entry is TypeScript, not built JavaScript`)
+    if (pluginManifest.name !== plugin || pluginManifest.version !== version) fail(`${profile}: installed plugin identity differs from ${plugin}@${version} (actual ${pluginManifest.name}@${pluginManifest.version})`)
+    if (!/\.(?:mjs|cjs|js)$/.test(entry)) fail(`${profile}: plugin entry is not built JavaScript`)
     const loadedProfile = loadProfileDirectory('dsh-session-tools preflight', profile, hostAnchor)
     const resolution = await createRuntimeResolution({ installAnchor: hostAnchor, profile: loadedProfile, home: root })
     const ctx = new Context()
@@ -101,10 +107,10 @@ try {
       await ctx.fiber.dispose()
     }
   }
-  if (oldPatch.includes("name: '@deepseek-ai/dsh-tool-session-query'") || oldPatch.includes('name: "@deepseek-ai/dsh-tool-session-query"')) fail('Official session tool is present in home patch; remove or disable it first')
+  if (!checkOnly && (oldPatch.includes("name: '@deepseek-ai/dsh-tool-session-query'") || oldPatch.includes('name: "@deepseek-ai/dsh-tool-session-query"'))) fail('Official session tool is present in home patch; remove or disable it first')
   for (const name of profiles) {
     const profilePatch = join(root, `profiles/${name}/cordis.patch.yml`)
-    if (existsSync(profilePatch) && read(profilePatch).includes('@deepseek-ai/dsh-tool-session-query')) fail(`${name}: official session tool found in profile patch`)
+    if (!checkOnly && existsSync(profilePatch) && read(profilePatch).includes('@deepseek-ai/dsh-tool-session-query')) fail(`${name}: official session tool found in profile patch`)
   }
   if (checkOnly) {
     console.log(`Read-only DSH profile preflight passed for ${profiles.join(',')}; no configuration changed.`)

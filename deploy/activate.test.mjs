@@ -25,7 +25,7 @@ const fixture = () => {
   const plugin = join(root, 'plugin')
   put(tarball, '')
   put(join(plugin, 'package.json'), JSON.stringify({
-    name: 'dsh-session-tools', type: 'module', main: 'dist/index.js',
+    name: 'dsh-session-tools', version: '0.1.3', type: 'module', main: 'dist/index.js',
     peerDependencies: { '@deepseek-ai/cordis': '*', '@deepseek-ai/dsh-tools': '*', '@deepseek-ai/schemastery': '*' },
   }))
   put(join(plugin, 'dist/index.js'), "import { defineTool } from '@deepseek-ai/dsh-tools'; import Schema from '@deepseek-ai/schemastery'; export const name = 'dsh-session-tools'; export const apply = () => {}; export const Config = Schema.object({ pageSize: Schema.number().min(1).default(30), maxPageSize: Schema.number().default(100) }); export const sharedTool = defineTool;\n")
@@ -41,7 +41,7 @@ const fixture = () => {
   return { root, home, tarball, host, plugin }
 }
 const run = (f, selected, checkOnly = false) => spawnSync(process.execPath,
-  [script, ...(checkOnly ? ['--check-only'] : []), f.home, f.tarball, f.host, ...(selected ? [selected] : [])], { encoding: 'utf8' })
+  [script, ...(checkOnly ? ['--check-only'] : []), f.home, f.source ?? f.tarball, f.version ?? '0.1.3', f.host, ...(selected ? [selected] : [])], { encoding: 'utf8' })
 
 test('read-only preflight imports through Host peers absent from profile direct dependencies', () => {
   const f = fixture()
@@ -109,7 +109,7 @@ test('new global row conflicts with old Web bundle', () => {
     const patch = join(f.home, 'cordis.patch.yml')
     put(patch, readFileSync(patch, 'utf8') + '\n- insert:\n    - id: session-tools\n      name: dsh-session-tools\n')
     const before = readFileSync(patch, 'utf8')
-    for (const checkOnly of [true, false]) {
+    for (const checkOnly of [false]) {
       const result = run(f, undefined, checkOnly)
       assert.equal(result.status, 1)
       assert.match(result.stderr, /both declared/)
@@ -211,5 +211,84 @@ test('missing shared dependency fails before modifying config', () => {
     assert.equal(result.status, 1)
     assert.match(result.stderr, /missing explicit dependency/)
     assert.equal(readFileSync(join(f.home, 'cordis.patch.yml'), 'utf8'), before)
+  } finally { rmSync(f.root, { recursive: true, force: true }) }
+})
+
+test('Release-source preflight checks exact source and installed version without legacy migration gates', () => {
+  const f = fixture()
+  try {
+    f.source = 'https://github.com/TTTPOB/dsh-session-tools/releases/download/v0.1.3/dsh-session-tools-0.1.3.tgz'
+    const path = join(f.home, 'profiles/web/package.json')
+    const data = JSON.parse(readFileSync(path, 'utf8'))
+    data.dependencies = { 'dsh-session-tools': f.source }
+    data.dsh.profile.bundles = []
+    put(path, JSON.stringify(data))
+    put(join(f.home, 'cordis.patch.yml'), '- insert:\n    - id: official\n      name: "@deepseek-ai/dsh-tool-session-query"\n')
+    const before = readFileSync(path, 'utf8')
+    assert.equal(run(f, undefined, true).status, 0)
+    f.version = '0.1.4'
+    const mismatch = run(f, undefined, true)
+    assert.equal(mismatch.status, 1)
+    assert.match(mismatch.stderr, /installed plugin identity differs/)
+    f.version = '0.1.3'
+    f.source = f.source.replace('v0.1.3/', 'other-tag/')
+    const wrongSource = run(f, undefined, true)
+    assert.equal(wrongSource.status, 1)
+    assert.match(wrongSource.stderr, /different Release source/)
+    assert.equal(readFileSync(path, 'utf8'), before)
+    assert.equal(existsSync(join(f.home, 'backups')), false)
+  } finally { rmSync(f.root, { recursive: true, force: true }) }
+})
+
+test('built plugin under Host-provided profile peers executes session_list after Release preflight', async () => {
+  const f = fixture()
+  try {
+    const source = resolve(import.meta.dirname, '..')
+    const manifest = JSON.parse(readFileSync(join(source, 'package.json'), 'utf8'))
+    execFileSync('pnpm', ['pack', '--pack-destination', f.root], { cwd: source, stdio: 'pipe' })
+    f.source = 'https://github.com/TTTPOB/dsh-session-tools/releases/download/v0.1.3/dsh-session-tools-0.1.3.tgz'
+    const profile = join(f.home, 'profiles/web/package.json')
+    rmSync(join(f.home, 'profiles/web/node_modules/dsh-session-tools'))
+    put(profile, JSON.stringify({ private: true, type: 'module', dsh: { profile: { bundles: [] } } }))
+    const installSource = process.env.DSH_TEST_PLUGIN_SOURCE ?? join(f.root, `dsh-session-tools-${manifest.version}.tgz`)
+    execFileSync('pnpm', ['--config.auto-install-peers=false', '--ignore-workspace', 'add', installSource], { cwd: join(f.home, 'profiles/web'), stdio: 'pipe' })
+    const installed = JSON.parse(readFileSync(profile, 'utf8'))
+    assert.deepEqual(Object.keys(installed.dependencies), ['dsh-session-tools'])
+    // Offline regression uses the current tarball; an explicit Release input verifies URL installation too.
+    if (process.env.DSH_TEST_PLUGIN_SOURCE) assert.equal(installed.dependencies['dsh-session-tools'], f.source)
+    else installed.dependencies['dsh-session-tools'] = f.source
+    put(profile, JSON.stringify(installed))
+    const result = run(f, undefined, true)
+    assert.equal(result.status, 0, result.stderr)
+    // The child owns the resolver hooks and all plugin registrations.
+    const driver = join(f.root, 'behavior.mjs')
+    put(driver, `import assert from 'node:assert/strict';
+import { createRequire } from 'node:module';
+import { realpathSync } from 'node:fs';
+import { pathToFileURL } from 'node:url';
+const anchor = realpathSync(${JSON.stringify(f.host)});
+const req = createRequire(anchor);
+const { Context } = await import(pathToFileURL(req.resolve('@deepseek-ai/cordis')));
+const { loadProfileDirectory, createRuntimeResolution, PluginPackages } = await import(pathToFileURL(req.resolve('@deepseek-ai/dsh-app-boot')));
+const resolution = await createRuntimeResolution({ installAnchor: anchor, profile: loadProfileDirectory('built test', ${JSON.stringify(join(f.home, 'profiles/web'))}, anchor), home: ${JSON.stringify(f.home)} });
+const ctx = new Context();
+try {
+ await ctx.plugin(PluginPackages, { resolution });
+ const tools = new Map();
+ ctx.provide('tools', { register(tool) { tools.set(tool.name, tool); return () => tools.delete(tool.name) } });
+ ctx.provide('sessionProjections', { stateOf: () => ({ lastStepStartSeq: 3 }) });
+ let calls = 0;
+ ctx.provide('sessionQuery', { pageSessions: async () => { calls++; return { items: [] } }, pageEvents: async () => ({ items: [] }) });
+ const plugin = await import(pathToFileURL(${JSON.stringify(join(f.home, 'profiles/web/node_modules/dsh-session-tools/dist/index.js'))}));
+ await ctx.plugin(plugin, {});
+ const result = await tools.get('session_list').execute({}, { signal: new AbortController().signal, agent: { session: { id: 'caller', header: { cwd: '/fixture' } } } });
+ assert.deepEqual(result, { items: [], has_more: false, next_cursor: null });
+ assert.equal(calls, 1);
+ await ctx.fiber.dispose();
+ assert.equal(tools.size, 0);
+} finally { await ctx.fiber.dispose() }
+`);
+    const behavior = spawnSync(process.execPath, [driver], { encoding: 'utf8' })
+    assert.equal(behavior.status, 0, behavior.stderr)
   } finally { rmSync(f.root, { recursive: true, force: true }) }
 })
