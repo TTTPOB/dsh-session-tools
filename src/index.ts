@@ -1,6 +1,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-session-projection'
 import type {} from '@deepseek-ai/dsh-session-projection-cache'
+import type {} from '@deepseek-ai/dsh-workspace'
 import Schema from '@deepseek-ai/schemastery'
 import { defineTool, type ToolRunContext } from '@deepseek-ai/dsh-tools'
 import { SessionId } from '@deepseek-ai/dsh-session'
@@ -13,7 +14,7 @@ import { readTools } from './read-tools.js'
 /** Loader-visible plugin identity. */
 export const name = 'dsh-session-tools'
 /** Services required before tools are registered. */
-export const inject = ['tools', 'sessionQuery', 'sessionProjections']
+export const inject = ['tools', 'sessionQuery', 'sessionProjections', 'workspaceRegistry']
 /** Limits applied to native output, indexed searches and prepared event fragments. */
 export interface Config { pageSize: number; maxPageSize: number; previewChars: number; outputBytes: number; searchTimeoutMs: number; eventReadCacheEntries: number; eventReadCacheBytes: number }
 /** Loader-validated defaults and numeric limits. */
@@ -94,22 +95,56 @@ export function apply(ctx: Context, config: Config): void {
       if (!bounded(result, outputBytes)) throw new Error('Session list page exceeds outputBytes; lower limit and start a new listing without a cursor, or increase configured outputBytes; no partial result was returned')
       return result
     } }))
-    add(defineTool({ name: 'session_search', description: 'Indexed FTS token search across sessions; not arbitrary substring matching. Titles are display hints; title_cached:true marks cached hints that may lag renames. Never scans logs for search. Excludes caller session by default.', parameters: { query: { type: 'string', required: true }, scope: scopeParam, ...limitParam, cursor: { type: 'string', description: 'Opaque continuation cursor.' }, include_current: { type: 'boolean', description: 'Include current session (default false).' } }, output, timeoutMs: searchTimeoutMs, presentCall: call('Search sessions'), async execute(args, exec) {
-      const access = caller(exec, args.scope)
-      const query = args.query.trim(); if (!query) throw new Error('query must not be empty')
-      const requested = size(args.limit)
-      exec.signal.throwIfAborted()
-      let page
-      try { page = await ctx.sessionQuery.searchSessions({ query, limit: requested, sessionFilters: access.project ? [{ kind: 'cwd', values: [access.cwd!] }] : [], ...(args.cursor ? { cursor: args.cursor as SessionSearchCursor } : {}) }, { signal: exec.signal }) }
-      catch (error) { searchError(error) }
-      exec.signal.throwIfAborted()
-      const hits = page.items.filter(hit => args.include_current || hit.header.id !== access.id)
-      const names = await titles(hits, exec, access)
-      const items = hits.map(hit => ({ ...record(hit, names.get(hit.header.id)?.title, !access.project, names.get(hit.header.id)?.cached), seq: hit.bestMatch.seq, type: hit.bestMatch.type, snippet: trim(hit.bestMatch.snippet, previewChars).preview, snippet_truncated: trim(hit.bestMatch.snippet, previewChars).text_truncated }))
-      const result = { items, has_more: !!page.nextCursor, next_cursor: page.nextCursor ?? null }
-      if (!bounded(result, outputBytes)) throw new Error('Indexed search page exceeds outputBytes; lower limit and start a new search without a cursor, or increase configured outputBytes; no partial result was returned')
-      return result
-    } }))
+    add(defineTool({
+      name: 'session_search',
+      description: 'Indexed FTS token search across sessions; not arbitrary substring matching. Titles are display hints; title_cached:true marks cached hints that may lag renames. Never scans logs for search. Excludes caller session and archived sessions by default. Do not search archived sessions unless there is a specific need; set include_archived:true only then. Filtered pages can be empty with has_more:true; continue with next_cursor.',
+      parameters: {
+        query: { type: 'string', required: true },
+        scope: scopeParam,
+        ...limitParam,
+        cursor: { type: 'string', description: 'Opaque continuation cursor.' },
+        include_current: { type: 'boolean', description: 'Include current session (default false).' },
+        include_archived: { type: 'boolean', description: 'Include archived sessions (default false). Use only for a specific need to retrieve archived work; keep unchanged across continuation requests.' },
+      },
+      output,
+      timeoutMs: searchTimeoutMs,
+      presentCall: call('Search sessions'),
+      async execute(args, exec) {
+        const access = caller(exec, args.scope)
+        const query = args.query.trim(); if (!query) throw new Error('query must not be empty')
+        const requested = size(args.limit)
+        exec.signal.throwIfAborted()
+        let page
+        try {
+          page = await ctx.sessionQuery.searchSessions({
+            query,
+            limit: requested,
+            sessionFilters: access.project ? [{ kind: 'cwd', values: [access.cwd!] }] : [],
+            ...(args.cursor ? { cursor: args.cursor as SessionSearchCursor } : {}),
+          }, { signal: exec.signal })
+        } catch (error) { searchError(error) }
+        exec.signal.throwIfAborted()
+        const archived = new Set(ctx.workspaceRegistry.archivedSessionIds)
+        const hits = page.items.filter(hit =>
+          (args.include_current || hit.header.id !== access.id)
+          && (args.include_archived === true || !archived.has(hit.header.id)))
+        const names = await titles(hits, exec, access)
+        const items = hits.map(hit => {
+          const snippet = trim(hit.bestMatch.snippet, previewChars)
+          return {
+            ...record(hit, names.get(hit.header.id)?.title, !access.project, names.get(hit.header.id)?.cached),
+            archived: archived.has(hit.header.id),
+            seq: hit.bestMatch.seq,
+            type: hit.bestMatch.type,
+            snippet: snippet.preview,
+            snippet_truncated: snippet.text_truncated,
+          }
+        })
+        const result = { items, has_more: !!page.nextCursor, next_cursor: page.nextCursor ?? null }
+        if (!bounded(result, outputBytes)) throw new Error('Indexed search page exceeds outputBytes; lower limit and start a new search without a cursor, or increase configured outputBytes; no partial result was returned')
+        return result
+      },
+    }))
     add(defineTool({ name: 'session_event_search', description: 'Indexed FTS token search within a session; not arbitrary substring matching. Never scans logs. Current session excludes executing step.', parameters: { ...targetParam, query: { type: 'string', required: true }, scope: scopeParam, ...limitParam, cursor: { type: 'string' } }, output, timeoutMs: searchTimeoutMs, presentCall: call('Search events'), async execute(args, exec) {
       const access = caller(exec, args.scope); const sessionId = await target(args.session_id, exec, access)
       const query = args.query.trim(); if (!query) throw new Error('query must not be empty')

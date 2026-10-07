@@ -17,14 +17,14 @@ try {
   execFileSync('pnpm', ['--config.auto-install-peers=false', 'add',
     join(root, `dsh-session-tools-${version}.tgz`),
     '@deepseek-ai/cordis@4.0.4', '@deepseek-ai/dsh-tools@0.1.7-rc.2',
-    queryPackage, '@deepseek-ai/dsh-session@0.1.7-rc.2',
+    queryPackage, '@deepseek-ai/dsh-session@0.1.7-rc.2', '@deepseek-ai/dsh-workspace@0.1.7-rc.2',
     '@deepseek-ai/dsh-session-projection@0.1.7-rc.2', '@deepseek-ai/schemastery@3.18.4',
     ...['agent','ptc-runtime','invariants','llm','scope','system-prompt','user-approval','sandbox','sandbox-policy'].map(x => `@deepseek-ai/dsh-${x}@0.1.7-rc.2`),
   ], { cwd: root, stdio: 'pipe' })
   const hostRequire = createRequire(join(root, 'package.json'))
   const pluginPath = hostRequire.resolve('dsh-session-tools')
   const pluginRequire = createRequire(pluginPath)
-  for (const name of ['@deepseek-ai/cordis', '@deepseek-ai/dsh-tools', '@deepseek-ai/dsh-session-query', '@deepseek-ai/dsh-session-projection']) {
+  for (const name of ['@deepseek-ai/cordis', '@deepseek-ai/dsh-tools', '@deepseek-ai/dsh-session-query', '@deepseek-ai/dsh-session-projection', '@deepseek-ai/dsh-workspace']) {
     assert.equal(realpathSync(pluginRequire.resolve(name)), realpathSync(hostRequire.resolve(name)), `shared peer ${name}`)
   }
   const entry = await import(pluginPath)

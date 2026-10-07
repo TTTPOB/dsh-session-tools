@@ -6,7 +6,7 @@ const config = { pageSize: 30, maxPageSize: 100, previewChars: 240, outputBytes:
 function setup(query, options = {}) {
   const definitions = new Map()
   let cleanup
-  const ctx = { get(name) { return this[name] }, sessionQuery: query, sessionProjections: { stateOf: () => ({ lastStepStartSeq: 3 }) }, tools: { register(tool) { definitions.set(tool.name, tool); return () => definitions.delete(tool.name) } }, effect(fn) { cleanup = fn() } }
+  const ctx = { get(name) { return this[name] }, sessionQuery: query, workspaceRegistry: { archivedSessionIds: [] }, sessionProjections: { stateOf: () => ({ lastStepStartSeq: 3 }) }, tools: { register(tool) { definitions.set(tool.name, tool); return () => definitions.delete(tool.name) } }, effect(fn) { cleanup = fn() } }
   apply(ctx, { ...config, ...options })
   const controller = new AbortController()
   const exec = { signal: controller.signal, agent: { session: { id: 'self', header: { cwd: '/one' } } } }
@@ -64,6 +64,44 @@ test('session search returns the full provider page and one call with requested 
   assert.deepEqual(calls[0].sessionFilters, [{ kind: 'cwd', values: ['/one'] }])
   assert.deepEqual(page.items.map(x => x.session_id), ['a'])
   assert.equal(page.has_more, true); assert.equal(page.next_cursor, 'opaque')
+})
+test('session search excludes archives by default and includes them only on request', async () => {
+  const calls = []; const titleBatches = []
+  const f = setup(provider({
+    searchSessions: async request => { calls.push(request); return { items: [rows[0], rows[2]].map(row => ({ ...row, bestMatch: { seq: 1, type: 'user/message', snippet: 'hello' } })) } },
+    readTitleSnapshots: async ids => { titleBatches.push(ids); return provider().readTitleSnapshots(ids) },
+  }))
+  f.ctx.workspaceRegistry.archivedSessionIds = ['a']
+  const tool = f.definitions.get('session_search')
+  assert.match(tool.description, /Do not search archived sessions unless there is a specific need/)
+  for (const include_archived of [undefined, false]) {
+    const args = { query: 'hello', include_current: true, ...(include_archived === undefined ? {} : { include_archived }) }
+    const page = await run(f, 'session_search', args)
+    assert.deepEqual(page.items.map(item => [item.session_id, item.archived]), [['self', false]])
+  }
+  assert.deepEqual(titleBatches, [['self'], ['self']])
+  const included = await run(f, 'session_search', { query: 'hello', include_archived: true })
+  assert.deepEqual(included.items.map(item => [item.session_id, item.archived]), [['a', true]])
+  assert.deepEqual(calls[2].sessionFilters, [{ kind: 'cwd', values: ['/one'] }])
+  f.ctx.workspaceRegistry.archivedSessionIds = []
+  const restored = await run(f, 'session_search', { query: 'hello', scope: 'all' })
+  assert.deepEqual(restored.items.map(item => [item.session_id, item.archived]), [['a', false]])
+  assert.deepEqual(calls[3].sessionFilters, [])
+})
+test('archive-only provider page stays empty with its cursor and does not refill', async () => {
+  const calls = []
+  const f = setup(provider({ searchSessions: async request => {
+    calls.push(request)
+    const row = request.cursor ? rows[2] : rows[0]
+    return { items: [{ ...row, bestMatch: { seq: 1, type: 'user/message', snippet: 'hello' } }], ...(request.cursor ? {} : { nextCursor: 'next' }) }
+  } }))
+  f.ctx.workspaceRegistry.archivedSessionIds = ['a']
+  const first = await run(f, 'session_search', { query: 'hello', limit: 1, include_current: true })
+  assert.deepEqual(first, { items: [], has_more: true, next_cursor: 'next' })
+  assert.equal(calls.length, 1)
+  const next = await run(f, 'session_search', { query: 'hello', limit: 1, include_current: true, cursor: first.next_cursor })
+  assert.deepEqual(next.items.map(item => item.session_id), ['self'])
+  assert.equal(next.has_more, false); assert.equal(calls[1].cursor, 'next')
 })
 test('self-only provider page may be empty with continuation and no refill', async () => {
   let count = 0

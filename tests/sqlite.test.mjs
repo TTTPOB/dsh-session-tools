@@ -25,6 +25,8 @@ test('actual SQLite index honors project/all, cursor and native tool results', a
     await ctx.plugin(ToolRuntime)
     await ctx.plugin(JsonlSessionPersistence, { root, compression: 'none' })
     await ctx.plugin(SqliteSessionQueryEngine, { path: join(root, 'index.db') })
+    const archives = { archivedSessionIds: [] }
+    ctx.provide('workspaceRegistry', archives)
     await ctx.plugin(plugin)
     await ctx.loader?.await?.()
     for (const [id, cwd] of [['one', '/one'], ['two', '/one'], ['foreign', '/two']]) {
@@ -47,6 +49,13 @@ test('actual SQLite index honors project/all, cursor and native tool results', a
     assert.equal(second.items.length, 1); assert.notEqual(second.items[0].session_id, first.items[0].session_id)
     const all = await execute('session_search', { query: 'needle', scope: 'all' })
     assert.equal(all.items.length, 3); assert.ok(all.items.every(item => 'cwd' in item))
+    archives.archivedSessionIds = [SessionId('one'), SessionId('foreign')]
+    const active = await execute('session_search', { query: 'needle', scope: 'all' })
+    assert.deepEqual(active.items.map(item => [item.session_id, item.archived]), [['two', false]])
+    const withArchives = await execute('session_search', { query: 'needle', include_archived: true })
+    assert.deepEqual(new Set(withArchives.items.map(item => item.session_id)), new Set(['one', 'two']))
+    assert.equal(withArchives.items.find(item => item.session_id === 'one').archived, true)
+    archives.archivedSessionIds = []
     const own = await execute('session_event_search', { session_id: 'one', query: 'needle' })
     assert.equal(own.items.length, 1); assert.equal(own.has_more, false)
     const list = await execute('session_list', { limit: 1 })
