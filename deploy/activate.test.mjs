@@ -246,7 +246,8 @@ test('built plugin under Host-provided profile peers executes session_list after
     const source = resolve(import.meta.dirname, '..')
     const manifest = JSON.parse(readFileSync(join(source, 'package.json'), 'utf8'))
     execFileSync('pnpm', ['pack', '--pack-destination', f.root], { cwd: source, stdio: 'pipe' })
-    f.source = 'https://github.com/TTTPOB/dsh-session-tools/releases/download/v0.1.3/dsh-session-tools-0.1.3.tgz'
+    f.version = manifest.version
+    f.source = `https://github.com/TTTPOB/dsh-session-tools/releases/download/v${manifest.version}/dsh-session-tools-${manifest.version}.tgz`
     const profile = join(f.home, 'profiles/web/package.json')
     rmSync(join(f.home, 'profiles/web/node_modules/dsh-session-tools'))
     put(profile, JSON.stringify({ private: true, type: 'module', dsh: { profile: { bundles: [] } } }))
