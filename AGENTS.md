@@ -32,7 +32,7 @@ pnpm install --frozen-lockfile
 pnpm --config.verify-deps-before-run=false check
 ```
 
-`tests/pack-smoke.mjs` 检查显式安装 peers 的打包结果；`deploy/activate.test.mjs` 检查 Host 提供 peers、profile 无直接依赖的实际布局。
+`tests/pack-smoke.mjs` 检查显式安装 peers 的打包结果；`deploy/activate.test.mjs` 检查 profile 无直接依赖的实际布局。
 
 ## 溯源
 
