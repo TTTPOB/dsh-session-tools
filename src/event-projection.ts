@@ -27,7 +27,7 @@ export const EVENT_PROJECTION_STRATEGIES: Readonly<Record<string, string>> = {
   'web/deepseek-search-llm-request': 'auxiliary-request', 'workspace/changes': 'bounded-fact',
 }
 
-/** Caller-owned budgets are provisional until calibrated against local historical tasks. */
+/** Caller-owned display limits; calibrated defaults live in Config. */
 export interface ProjectionBudget {
   maxStringChars: number
   maxItems: number

@@ -1,11 +1,11 @@
 # ADR 0001：历史事件共享关联与投影模型
 
 - 状态：Accepted（已采纳）
-- 实施情况：尚未实施。
+- 实施情况：已完成并验收。共享关联、Compact/Detail 投影与 Raw 入口已接入公开读取工具；有界补读与展示裁剪的限制见 [ADR 0002](<0002-local-reading-and-completeness.md>)，默认预算依据见[读取预算校准](<../reading-budgets.md>)。
 
 ## 背景
 
-维护者和模型需要从会话历史理解“助手说了什么、调用了哪些工具、各自怎样结束”。原始事件按 `seq`（会话内原始事件序号）排列，但同一次活动的消息、调用和结果可以分散在多条记录中。现有列表从全文搜索提取文本生成预览，精确读取返回单条原始事件，尚不提供统一的活动视图，见[当前浏览工具](<../../src/read-tools.ts>)。
+维护者和模型需要从会话历史理解“助手说了什么、调用了哪些工具、各自怎样结束”。原始事件按 `seq`（会话内原始事件序号）排列，但同一次活动的消息、调用和结果可以分散在多条记录中。此前列表从全文搜索提取文本生成预览，精确读取只返回单条原始事件。现在[浏览工具](<../../src/read-tools.ts>)共用关联与投影模型。
 
 本设计提供三种读取视图：**Compact** 是用于浏览的简要活动视图；**Detail** 是同一活动的较详细内容和关系；**Raw** 是指定 `seq` 的完整逻辑事件，用于核验证据。活动是将有明确关系的事件组合成一个阅读单元，例如一次助手响应及其工具执行。Compact 与 Detail 对同一份证据应给出一致的活动身份与归属。
 
@@ -55,7 +55,7 @@ system replacement 和摘要 checkpoint 的再次覆盖是真实路径，分别�
 
 ### Read：范围与信息密度分开
 
-以下为目标接口示例。第 103 条是 PTC 子 `read` 的结果。默认 Read 只关联目标调用，不展开其它调用：
+以下请求与简化响应使用当前接口字段，省略无关元数据。第 103 条是 PTC 子 `read` 的结果。默认 Read 只关联目标调用，不展开其它调用：
 
 ```json
 { "session_id": "s1", "seq": 103, "view": "detail" }
@@ -65,7 +65,7 @@ system replacement 和摘要 checkpoint 的再次覆盖是真实路径，分别�
 {
   "requested_seq": 103,
   "read_scope": "target",
-  "tool": {
+  "tools": [{
     "call_id": "sub1",
     "name": "read",
     "start_seq": 102,
@@ -73,7 +73,7 @@ system replacement 和摘要 checkpoint 的再次覆盖是真实路径，分别�
     "arguments": { "file_path": "config.json" },
     "is_error": true,
     "error": { "code": "FS_NOT_FOUND", "message": "文件不存在" }
-  },
+  }],
   "activity_locator": { "root_call_id": "c1" }
 }
 ```
@@ -84,7 +84,7 @@ system replacement 和摘要 checkpoint 的再次覆盖是真实路径，分别�
 { "session_id": "s1", "seq": 103, "view": "detail", "read_scope": "activity" }
 ```
 
-以下是 List 或显式 `read_scope: "activity"` 的活动展示，使用目标设计字段并省略无关字段，不代表当前接口已实现。假设一次 `run_code` 调用内部执行了 `read`，子调用失败后，程序捕获错误并正常返回。
+以下是 List 的 `activities` 元素或显式 `read_scope: "activity"` 的简化活动响应，省略无关字段。假设一次 `run_code` 调用内部执行了 `read`，子调用失败后，程序捕获错误并正常返回。
 
 ### Compact：看活动和各层结局
 
@@ -93,20 +93,25 @@ system replacement 和摘要 checkpoint 的再次覆盖是真实路径，分别�
   "activity_id": "step:1:1",
   "kind": "step",
   "source_seqs": [99, 100, 101, 102, 103, 104, 105],
-  "assistant": { "text": "检查配置文件" },
+  "records": [{
+    "seq": 100, "type": "assistant/message", "read_seq": 100,
+    "preview": { "role": "assistant", "content": [{ "type": "text", "text": "检查配置文件" }] }
+  }],
   "tools": [{
     "call_id": "c1",
     "name": "run_code",
-    "call_seq": 101,
+    "start_seq": 101,
     "result_seq": 104,
     "is_error": false,
-    "result_preview": "检查完成，配置文件不存在",
-    "subcalls": [{
+    "result": [{ "type": "text", "text": "检查完成，配置文件不存在" }],
+    "children": [{
       "call_id": "sub1",
       "name": "read",
       "start_seq": 102,
       "result_seq": 103,
       "is_error": true,
+      "error_observed": true,
+      "error_seq": 103,
       "error_code": "FS_NOT_FOUND"
     }]
   }],
@@ -127,11 +132,11 @@ system replacement 和摘要 checkpoint 的再次覆盖是真实路径，分别�
   "tools": [{
     "call_id": "c1",
     "name": "run_code",
-    "call_seq": 101,
+    "start_seq": 101,
     "result_seq": 104,
     "is_error": false,
-    "result": { "text": "检查完成，配置文件不存在" },
-    "subcalls": [{
+    "result": [{ "type": "text", "text": "检查完成，配置文件不存在" }],
+    "children": [{
       "call_id": "sub1",
       "name": "read",
       "start_seq": 102,
@@ -144,7 +149,7 @@ system replacement 和摘要 checkpoint 的再次覆盖是真实路径，分别�
 }
 ```
 
-Detail 也受展示预算约束，不保证展开所有正文。若结果很长，可保留 `result_preview`、`result_seq` 并标记 `truncated: true`，而不是把整个结果直接塞进响应。具体字段长度和预算由实现设计与样本验证确定。
+Detail 也受展示预算约束，不保证展开所有正文。若结果很长，可缩短或省略 `result` 预览，保留 `result_seq` 并标记 `truncated: true`。具体默认预算及抽样依据见 [ADR 0002](<0002-local-reading-and-completeness.md#展示预算与精确续读>)。
 
 ### Raw：指定原始事件，不返回合并活动
 
@@ -158,16 +163,19 @@ Raw 返回第 103 条原始逻辑事件，而不是整个 `step:1:1` 活动。�
 
 ### 从 replacement 定位原工具结果
 
-以下是假设单目标 pruner replacement 位于 90、引用原结果 40 的设计示例：
+以下是假设单目标 pruner replacement 位于 90、引用原结果 40 的简化响应：
 
 ```json
 {
   "requested_seq": 90,
-  "tools": [{
-    "call_id": "c1",
+  "records": [{
+    "seq": 90, "type": "tool/result", "read_seq": 90,
     "original_result_seq": 40,
-    "result_preview": "Original execution output",
-    "replacement_seq": 90
+    "surface_op": { "op": "replace", "startSeq": 40, "endSeq": 40 }
+  }],
+  "tools": [{
+    "call_id": "c1", "result_seq": 40,
+    "result": [{ "type": "text", "text": "Original execution output" }]
   }]
 }
 ```
@@ -184,7 +192,7 @@ Detail 可沿明确引用展示原结果；Raw 请求 90 仍返回第 90 条 rep
 
 关联与投影由本插件负责，仍只通过公开 `ctx.sessionQuery` 读取；不持久化另一份活动树。搜索索引职责单独见 [ADR 0003](<0003-search-and-projection-separation.md>)。
 
-采用目标接口，不为旧返回结构或已有一次性 PTC 调用代码提供兼容层、双轨或过渡期开关：临时代码没有持续兼容需求，维护两套返回契约的成本不值。调用方需要更新。Raw 保留现有大事件续读方式；“完整逻辑事件”不承诺恢复 spill（移到日志外的大结果）的全文、二进制附件或磁盘 JSONL 的物理原文，也不自动读取子会话正文。
+采用上述接口，不为旧返回结构或已有一次性 PTC 调用代码提供兼容层、双轨或过渡期开关：临时代码没有持续兼容需求，维护两套返回契约的成本不值。调用方需要更新。Raw 保留现有大事件续读方式；“完整逻辑事件”不承诺恢复 spill（移到日志外的大结果）的全文、二进制附件或磁盘 JSONL 的物理原文，也不自动读取子会话正文。
 
 ## 验证要点
 

@@ -5,7 +5,7 @@ import { associateEvents, fields, originalResultReference, toolIdentity, type Re
 import type { EventProjection, ProjectionEvidence, ProjectionBudget } from './event-projection.js'
 import type { JsonValue } from './shared.js'
 
-/** Provisional working limits; local-history calibration is a separate task. */
+/** Caller-owned evidence limits; calibrated defaults live in Config. */
 export interface ReaderBudget {
   readBatchSize: number
   supplementalEvents: number

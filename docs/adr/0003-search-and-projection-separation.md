@@ -1,7 +1,7 @@
 # ADR 0003：搜索与事件投影分离
 
 - 状态：Accepted（已采纳）
-- 实施情况：尚未实施。
+- 实施情况：已完成并验收。surfaces 过滤与轻量 read_seq 已接入搜索；省略 surfaces 默认覆盖全部三个面中的既有索引文档，原字段投影不扩展索引。
 
 ## 背景
 
@@ -9,7 +9,7 @@
 
 现有[文本提取器](<../../../deepseek-harness/packages/session-query/session-query/src/extraction.ts>)只为 user/message、assistant/message、tool/call、tool/result、todo/write 和部分 turn/end 提取文本；空文本事件不建立搜索文档，见[文档构建](<../../../deepseek-harness/packages/session-query/session-query/src/documents.ts#L36-L53>)。例如工具结果中的 error.name/code 可被提取，error.reason/meta 并不会因此全部可搜索。PTC（Programmatic Tool Calling，程序化工具调用）在代码执行中产生的子工具 dispatch 记录没有独立全文文档。
 
-当前列表复用同一提取文本生成预览，导致“未索引”也变成“缺少可读预览”，见[现有列表](<../../src/read-tools.ts#L31-L47>)。历史理解需要改善预览，但不必同时扩大搜索索引。
+此前列表复用同一提取文本生成预览，导致“未索引”也变成“缺少可读预览”；现在[列表](<../../src/read-tools.ts>)直接投影原事件字段。历史理解需要改善预览，但不必同时扩大搜索索引。
 
 ## 决策
 
@@ -31,7 +31,7 @@ surface 是事件在消息投影中的分类，不是消息来源或重要性等
 
 例如一次普通工具调用：含 `tool-call` 块的 [assistant/message](<https://github.com/TTTPOB/deepseek-harness/blob/8091de25e10c43debeda8f5485102adf41f0db42/packages/core/agent-loop/src/agent.ts#L495-L518>)进入模型消息投影；独立的 [tool/call](<https://github.com/TTTPOB/deepseek-harness/blob/8091de25e10c43debeda8f5485102adf41f0db42/packages/core/agent-loop/src/tool-calls.ts#L262-L266>)记录执行开始，属于 `log-only`；[tool/result](<https://github.com/TTTPOB/deepseek-harness/blob/8091de25e10c43debeda8f5485102adf41f0db42/packages/core/agent-loop/src/tool-calls.ts#L268-L290>)作为结果消息进入投影。前后两个消息事件未被后来替换时是 `current`，被替换后是 `shadowed`，并非永远 `current`。`log-only` 只说明这条独立记录不进入消息投影，不表示模型完全不知道该操作：调用块和结果消息仍可提供该操作的信息。
 
-新增可选 `surfaces` 参数。显式数组按 OR 过滤，空数组拒绝；插件将其转换为现有 surface metadata filter，交给 provider 在查询阶段执行，而不是取得一页命中后再删除。搜索仍只覆盖这些面中**已有的索引文档**，选择三个面也不是遍历原始日志中的所有字段。
+提供可选 `surfaces` 参数。显式数组按 OR 过滤，空数组拒绝；插件将其转换为现有 surface metadata filter，交给 provider 在查询阶段执行，而不是取得一页命中后再删除。搜索仍只覆盖这些面中**已有的索引文档**，选择三个面也不是遍历原始日志中的所有字段。
 
 省略 `surfaces` 时，默认覆盖 `current`、`shadowed`、`log-only` 三个面中已有的全部索引文档，因为历史回忆可能需要被替换的正文，以及 log-only 的 tool/call、todo 内容。默认范围由历史回忆需求决定，不以旧调用代码兼容性为依据。
 

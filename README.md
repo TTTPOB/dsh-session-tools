@@ -34,9 +34,9 @@ Raw 缓存仅保存同 provider/session/原 seq 的已准备 code points 与 cap
 
 ### 配置与预算
 
-所有预算通过插件 `Config` 配置，不需要改源码。以下是可运行的初始工作值，**尚未用本机历史校准**；ADR 0001/0002 功能验收后另行通过公开 query 抽样评估，此处不访问真实历史。
+所有预算通过插件 `Config` 配置，不需要改源码。以下默认值已通过公开 session query 对本机 6 个真实历史会话做有界估计后保留；[校准依据与样本限制](<docs/reading-budgets.md>)记录读取量、投影大小和未覆盖场景。
 
-| 字段 | 初始值 | 控制内容 |
+| 字段 | 默认值 | 控制内容 |
 |---|---:|---|
 | `pageSize / maxPageSize` | 30 / 100 | 原事件页大小；pageSize 不超过 maxPageSize |
 | `previewChars` | 240 | 搜索 snippet 与标题预览 |
@@ -68,7 +68,7 @@ Raw 缓存仅保存同 provider/session/原 seq 的已准备 code points 与 cap
 
 `options.view` 为 compact/detail。相同预算下，Compact 保留首个可见消息块和首个工具结果块、省略工具参数及错误正文；Detail 展示有界多块内容、参数、错误和 meta。两者保留角色、消息／调用身份、来源类别、工具增删事实及各层错误存在、code 和 seq；Compact 的内容省略标记 `truncated`，不会改变已核实的配对和身份。Reasoning 和嵌入 stream 不作为普通消息正文展开。
 
-调用方显式提供 `options.budget`：`maxStringChars`（Unicode code points）、`maxItems`、`maxDepth`、`maxNodes` 和最终 JSON UTF-8 `outputBytes`。消息和 developer 工具增删块的实际访问受 maxItems／maxNodes 限制；工具树受每层 maxItems、总 maxNodes 和 maxDepth 限制，达到上限后不访问剩余节点。预览先有界访问原字段，再序列化有限结果；字段名超限的预览字段省略。最终预算不足时继续省略预览，保留身份、seq、已发现错误及其 Raw 入口；树节点省略后，记录证据仍保留已发现的错误，关联阶段已知配对缺口仍影响完整性。最小元数据仍超限则抛错。reader 仍负责约束传入的事件数、读取字节和跨度；这里没有已校准默认值，限额需完整 reader 功能完成后用本机历史校准。
+调用方显式提供 `options.budget`：`maxStringChars`（Unicode code points）、`maxItems`、`maxDepth`、`maxNodes` 和最终 JSON UTF-8 `outputBytes`。消息和 developer 工具增删块的实际访问受 maxItems／maxNodes 限制；工具树受每层 maxItems、总 maxNodes 和 maxDepth 限制，达到上限后不访问剩余节点。预览先有界访问原字段，再序列化有限结果；字段名超限的预览字段省略。最终预算不足时继续省略预览，保留身份、seq、已发现错误及其 Raw 入口；树节点省略后，记录证据仍保留已发现的错误，关联阶段已知配对缺口仍影响完整性。最小元数据仍超限则抛错。reader 仍负责约束传入的事件数、读取字节和跨度；默认限额由插件 Config 提供，校准依据见[读取预算](<docs/reading-budgets.md>)。
 
 reader 可传入 `options.evidence.pageSourceSeqs`、`coverageComplete`、`incompleteReasons`：页内来源不会因补读而增加，Activity 未有读取覆盖证据时保持 incomplete，目标工具缺调用/结果或明确原结果引用时附缺口。`complete` 和正文裁剪的 `truncated` 独立。`coverageComplete` 必须由 reader 的固定 observation 和实际覆盖证明，不能仅因看到首尾边界或一个完整工具对就设为 true。返回值不持有 observation 或执行 I/O，现有公共工具接口在本节之外定义。
 
@@ -76,7 +76,7 @@ reader 可传入 `options.evidence.pageSourceSeqs`、`coverageComplete`、`incom
 
 [src/bounded-reader.ts](src/bounded-reader.ts) 的 `BoundedReader` 借用调用方拥有的单个 `SessionObservation`，只经 `readEvents` 扫描固定 cut，不访问 `.events`。`page` 用原事件数选择锚点并确认是否还有匹配类型；`completeTarget` 只补目标工具对，`completeActivities` 有界读取页内活动附近记录及明确引用。补读数量、处理 bytes、seq 跨度和扫描 batch 分别由 `ReaderBudget` 控制，限额耗尽保留缺口，取消明确报错。活动完整性需要真实生命周期首尾与中间每条记录均已取得，并检查明确引用；只有工具配对或首尾边界不能证明 Step 完整。
 
-`commitReadingPage` 对最终整页包装 JSON 执行 UTF-8 `outputBytes`，预算不足时省略已有限预览，保留身份、关系、已知错误、分页锚点；最小完整元数据仍放不下则报错，不提交部分页或 cursor。读取预算的工作值尚待功能完成后的独立本机历史校准。
+`commitReadingPage` 对最终整页包装 JSON 执行 UTF-8 `outputBytes`，预算不足时省略已有限预览，保留身份、关系、已知错误、分页锚点；最小完整元数据仍放不下则报错，不提交部分页或 cursor。默认读取预算保留了本机有界历史抽样所需的余量，详见[校准依据](<docs/reading-budgets.md>)；不承诺任意跨度完整。
 
 ## Build and handoff
 
