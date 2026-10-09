@@ -126,5 +126,38 @@ test('actual SQLite index honors project/all, cursor and native tool results', a
     }
     const eventPage = await execute('session_event_search', { session_id: 'one', query: 'needle', limit: 2 })
     assert.equal(eventCalls, 1); assert.equal(eventPage.items.length, 2)
+    ctx.sessionQuery.searchEvents = originalEvents
+
+    const surfaceSession = ctx.sessions.get(SessionId('one'))
+    const shadowed = surfaceSession.append('user/message', createUserMessage({ content: [{ type: 'text', text: 'surfaceprobe original' }], source: { kind: 'user' } }), { surfaceOp: 'append' })
+    const current = surfaceSession.append('user/message', createUserMessage({ content: [{ type: 'text', text: 'surfaceprobe replacement' }], source: { kind: 'user' } }), { surfaceOp: { op: 'replace', startSeq: shadowed.seq, endSeq: shadowed.seq }, sourceEventSeqs: [shadowed.seq] })
+    const logOnly = surfaceSession.append('tool/call', { turn: 1, step: 1, callId: ToolCallId('surface-call'), name: 'read', arguments: JSON.stringify({ file_path: 'surfaceprobe' }) })
+    surfaceSession.append('system/message', { role: 'system', content: [{ type: 'text', text: 'unindexedprobe' }] }, { surfaceOp: 'append' })
+    const search = extra => execute('session_event_search', { session_id: 'one', query: 'surfaceprobe', ...extra })
+    const expected = [[shadowed.seq, 'shadowed'], [current.seq, 'current'], [logOnly.seq, 'log-only']]
+    const defaults = await search({})
+    assert.deepEqual(new Set(defaults.items.map(item => item.surface)), new Set(expected.map(([, surface]) => surface)))
+    for (const [seq, surface] of expected) {
+      const selected = await search({ surfaces: [surface], limit: 1 })
+      assert.deepEqual(selected.items.map(item => [item.seq, item.surface, item.read_seq]), [[seq, surface, seq]])
+      assert.equal(selected.has_more, false)
+      assert.equal(typeof selected.items[0].time, 'number')
+      assert.match(selected.items[0].snippet, /surfaceprobe/)
+    }
+    const selection = { surfaces: ['shadowed', 'log-only'], limit: 1 }
+    const surfaceFirst = await search(selection)
+    assert.equal(surfaceFirst.has_more, true)
+    const surfaceNext = await search({ ...selection, cursor: surfaceFirst.next_cursor })
+    assert.equal(surfaceNext.has_more, false)
+    assert.deepEqual(new Set([...surfaceFirst.items, ...surfaceNext.items].map(item => item.seq)), new Set([shadowed.seq, logOnly.seq]))
+    assert.deepEqual((await execute('session_event_search', { session_id: 'one', query: 'unindexedprobe' })).items, [])
+    const invalidSurface = await ctx.tools.execute({ name: 'session_event_search', arguments: { session_id: 'one', query: 'surfaceprobe', surfaces: ['invalid'] }, callId: ToolCallId(`sqlite-${++serial}`), signal: new AbortController().signal, agent: { id: caller.id, session: caller } })
+    assert.equal(invalidSurface.isError, true)
+
+    const prior = caller.append('user/message', createUserMessage({ content: [{ type: 'text', text: 'ceilingprobe prior' }], source: { kind: 'user' } }), { surfaceOp: 'append' })
+    caller.append('step/start', { turn: 1, step: 2 })
+    caller.append('user/message', createUserMessage({ content: [{ type: 'text', text: 'ceilingprobe executing' }], source: { kind: 'user' } }), { surfaceOp: 'append' })
+    const ceiling = await execute('session_event_search', { session_id: 'caller', query: 'ceilingprobe', surfaces: ['current'] })
+    assert.deepEqual(ceiling.items.map(item => item.read_seq), [prior.seq])
   } finally { await ctx.fiber.dispose(); await rm(root, { recursive: true, force: true }) }
 })

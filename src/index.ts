@@ -5,7 +5,7 @@ import type {} from '@deepseek-ai/dsh-workspace'
 import Schema from '@deepseek-ai/schemastery'
 import { defineTool, type ToolRunContext } from '@deepseek-ai/dsh-tools'
 import { SessionId } from '@deepseek-ai/dsh-session'
-import type { SessionRecord, SessionSearchCursor } from '@deepseek-ai/dsh-session-query'
+import type { SessionRecord, SessionSearchCursor, SessionEventMetadataFilter } from '@deepseek-ai/dsh-session-query'
 
 import { integer, bounded, trim, record, caller, authorize, searchError } from './shared.js'
 import { output, scopeParam, targetParam, limitParam, call } from './definitions.js'
@@ -145,14 +145,16 @@ export function apply(ctx: Context, config: Config): void {
         return result
       },
     }))
-    add(defineTool({ name: 'session_event_search', description: 'Indexed FTS token search within a session; not arbitrary substring matching. Never scans logs. Current session excludes executing step.', parameters: { ...targetParam, query: { type: 'string', required: true }, scope: scopeParam, ...limitParam, cursor: { type: 'string' } }, output, timeoutMs: searchTimeoutMs, presentCall: call('Search events'), async execute(args, exec) {
+    add(defineTool({ name: 'session_event_search', description: 'Indexed FTS token search within a session; not arbitrary substring matching. Searches existing indexed documents across all surfaces by default. PTC dispatch records are not indexed; no match does not mean no record. Snippets are index excerpts; use read_seq with session_event_read for Detail or Raw. Never scans logs or reads activities for hits. Current session excludes executing step.', parameters: { ...targetParam, query: { type: 'string', required: true }, scope: scopeParam, ...limitParam, surfaces: { type: 'array', items: { type: 'string', enum: ['current', 'shadowed', 'log-only'] }, description: 'OR filter on indexed surfaces; omit for all three. Empty arrays are rejected. Keep unchanged on continuation.' }, cursor: { type: 'string', description: 'Opaque continuation; keep query, scope, limit and surfaces unchanged.' } }, output, timeoutMs: searchTimeoutMs, presentCall: call('Search events'), async execute(args, exec) {
       const access = caller(exec, args.scope); const sessionId = await target(args.session_id, exec, access)
       const query = args.query.trim(); if (!query) throw new Error('query must not be empty')
       const requested = size(args.limit)
       // The active step is never searchable; prior steps in the same session remain available.
       const boundary = sessionId === access.id ? ctx.sessionProjections.stateOf(exec.agent!.session, 'turnBoundary')?.lastStepStartSeq : undefined
       if (sessionId === access.id && boundary == null) throw new Error('Current-session search requires a step/start event')
-      const filters = boundary == null ? [] : [{ kind: 'seq' as const, to: boundary - 1 }]
+      if (args.surfaces?.length === 0) throw new Error('surfaces must not be empty')
+      const filters: SessionEventMetadataFilter[] = boundary == null ? [] : [{ kind: 'seq', to: boundary - 1 }]
+      if (args.surfaces !== undefined) filters.push({ kind: 'surface', values: args.surfaces })
       if (boundary === 0) return { session_id: sessionId, items: [], has_more: false, next_cursor: null }
       exec.signal.throwIfAborted()
       let page
@@ -160,7 +162,10 @@ export function apply(ctx: Context, config: Config): void {
       catch (error) { searchError(error) }
       authorize(page.session, access)
       exec.signal.throwIfAborted()
-      const items = page.items.map(hit => ({ seq: hit.seq, type: hit.type, snippet: trim(hit.snippet, previewChars).preview, snippet_truncated: trim(hit.snippet, previewChars).text_truncated }))
+      const items = page.items.map(hit => {
+        const snippet = trim(hit.snippet, previewChars)
+        return { seq: hit.seq, type: hit.type, time: hit.time, surface: hit.surface, snippet: snippet.preview, snippet_truncated: snippet.text_truncated, read_seq: hit.seq }
+      })
       const result = { session_id: sessionId, items, has_more: !!page.nextCursor, next_cursor: page.nextCursor ?? null }
       if (!bounded(result, outputBytes)) throw new Error('Indexed search page exceeds outputBytes; lower limit and start a new search without a cursor, or increase configured outputBytes; no partial result was returned')
       return result

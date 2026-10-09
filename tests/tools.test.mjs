@@ -283,18 +283,27 @@ test('filtered event previews use selected seq range and count Chinese code poin
   assert.equal(page.items[0].text_truncated, true); assert.equal(page.has_more, false)
   assert.equal(page.next_after_seq, null)
 })
-test('current-session indexed search uses projection boundary, never lists raw events', async () => {
-  let range
-  const f = setup(provider({ listEvents: async () => { throw new Error('full log read forbidden') }, searchEvents: async request => { range = request.filters[0]; return { session: header('self'), items: [], nextCursor: undefined } } }))
-  assert.equal((await run(f, 'session_event_search', { session_id: 'self', query: 'token' })).has_more, false)
-  assert.deepEqual(range, { kind: 'seq', to: 2 })
+test('current-session search ANDs surface OR selection with the seq ceiling before provider ranking', async () => {
+  let filters
+  const f = setup(provider({ listEvents: async () => { throw new Error('full log read forbidden') }, searchEvents: async request => { filters = request.filters; return { session: header('self'), items: [] } } }))
+  assert.equal((await run(f, 'session_event_search', { session_id: 'self', query: 'token', surfaces: ['shadowed', 'log-only'] })).has_more, false)
+  assert.deepEqual(filters, [{ kind: 'seq', to: 2 }, { kind: 'surface', values: ['shadowed', 'log-only'] }])
 })
-test('event search returns provider page in one call with cursor unchanged', async () => {
+test('event search preserves ranked lightweight hits and forwards unchanged continuation without log reads', async () => {
   const requests = []
-  const f = setup(provider({ searchEvents: async request => { requests.push(request); return { session: header('a'), items: [0, 1].map(seq => ({ seq, type: 'user/message', snippet: 'token' })), nextCursor: 'opaque' } } }))
-  const result = await run(f, 'session_event_search', { session_id: 'a', query: 'token', limit: 2 })
-  assert.equal(requests.length, 1); assert.equal(requests[0].limit, 2)
-  assert.deepEqual(result.items.map(item => item.seq), [0, 1]); assert.equal(result.next_cursor, 'opaque')
+  const hits = [9, 2].map((seq, i) => ({ seq, type: 'user/message', time: 100 + i, surface: 'shadowed', snippet: 'token' }))
+  const forbidden = () => { throw new Error('search must not read logs or activities') }
+  const f = setup(provider({ readEvent: forbidden, listEvents: forbidden, filterEvents: forbidden, pageEvents: forbidden, traceEvent: forbidden, readTitleSnapshots: forbidden, observeSession: forbidden, searchEvents: async request => { requests.push(request); return { session: header('a'), items: hits, nextCursor: 'opaque' } } }))
+  const args = { session_id: 'a', query: 'token', limit: 2, surfaces: ['shadowed'] }
+  const result = await run(f, 'session_event_search', args)
+  assert.deepEqual(result.items, hits.map(hit => ({ ...hit, read_seq: hit.seq, snippet_truncated: false })))
+  assert.equal(result.next_cursor, 'opaque'); assert.equal(result.has_more, true)
+  await run(f, 'session_event_search', { ...args, cursor: result.next_cursor })
+  assert.deepEqual(requests, [undefined, 'opaque'].map(cursor => ({ sessionId: 'a', query: 'token', limit: 2, filters: [{ kind: 'surface', values: ['shadowed'] }], ...(cursor ? { cursor } : {}) })))
+})
+test('event search rejects an empty surfaces array before calling the index', async () => {
+  const f = setup(provider({ searchEvents() { throw new Error('provider must not be called') } }))
+  await assert.rejects(run(f, 'session_event_search', { session_id: 'a', query: 'token', surfaces: [] }), /surfaces must not be empty/)
 })
 test('abort before indexed query and mid-provider result prevents success', async () => {
   let searched = false
