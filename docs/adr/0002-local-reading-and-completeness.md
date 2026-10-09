@@ -134,11 +134,11 @@ Raw 沿用 Unicode code-point JSON 分片续读：单片不一定可解析，按
 ## 代价与实施边界
 
 - **查询可能返回部分记录。** 读者可以继续用 Detail、Raw 或自行编写 PTC 分析代码查找；插件不承诺一次补齐任意跨度的操作。
-- **局部展示不代表所有底层读取都便宜。** 当前活跃会话可以按范围读取；尚未加载的历史会话，首次准备可能读取完整日志。按事件类型筛选时，也可能经过很多不匹配记录才能找到下一页。这些成本需要单独量测，底层优化见 session-query 的[增量内存分析提案](<../../../deepseek-harness/.agents/notes/proposed/architecture/2026-10-09-session-query-incremental-memory-analysis.zh.md>)。
+- **局部展示不代表所有底层读取都便宜。** 当前活跃会话可以按范围读取；尚未加载的历史会话，首次准备可能读取完整日志。按事件类型筛选时，也可能经过很多不匹配记录才能找到下一页。这些成本需要单独量测，底层优化见 session-query 的[增量内存分析决策](<../../../deepseek-harness/.agents/notes/implemented/architecture/2026-10-09-session-query-incremental-memory-analysis.zh.md>)。
 - **超时不能假装已经读到末尾。** 取消或超时应明确报错，不返回可能跳过事件的翻页位置。
 - **读取权限保持不变。** 补读仍限于已授权会话，发现子会话入口不会自动读取子会话正文。
 
-实现依据：[公开读取接口](<../../../deepseek-harness/packages/session-query/session-query/src/observation.ts#L17-L57>)、[历史会话准备与缓存](<../../../deepseek-harness/packages/session-query/session-query/src/observation.ts#L77-L170>)、[现有分页规则](<../../../deepseek-harness/packages/session-query/session-query/src/index.ts#L220-L263>)。
+实现依据：[observation.ts](<../../../deepseek-harness/packages/session-query/session-query/src/observation.ts>) 中的 `SessionObservation` 与 `SessionObservationReader` 定义公开读取接口及历史会话准备/缓存；[query 引擎](<../../../deepseek-harness/packages/session-query/session-query/src/index.ts>) 中的 `pageEvents` 定义分页规则。
 
 ## 验证要点
 
