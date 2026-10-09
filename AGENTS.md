@@ -21,7 +21,7 @@
 
 ## 版本与依赖
 
-- query peer 固定为已验证的 `@deepseek-ai/dsh-session-query 0.1.7-rc.2-fork2`，开发依赖使用对应不可变 tarball；不声明未验证版本的兼容范围。要求公开 `pageSessions`／`pageEvents`／`observeSession`，缺失时在加载阶段明确报错。其他 DSH peers 保持 `0.1.7-rc.2`。
+- Session core 与 Query peers 分别固定为已验证的 `@deepseek-ai/dsh-session 0.1.7-rc.2-fork1`、`@deepseek-ai/dsh-session-query 0.1.7-rc.2-fork3`；开发依赖使用 Harness `daily-driver-v0.1.7-rc.2-fork16` 的对应不可变 tarball 及 SQLite `0.1.7-rc.2-fork6`。Query 依赖新 Session 的 `SurfaceFoldAccumulator`，不能替换成旧官方 Session；不声明未验证版本的兼容范围。要求公开 `pageSessions`／`pageEvents`／`observeSession`，缺失时在加载阶段明确报错。其他 DSH peers 保持 `0.1.7-rc.2`。
 - 同时需要 `workspaceRegistry`（来自 `@deepseek-ai/dsh-workspace`）与 query／projection／tool 服务；Cordis 会等待这些服务可用后再注册工具。
 - 大事件分片缓存由插件 effect 拥有；dispose/HMR 清空缓存，进行中的旧调用不得重新填充。
 

@@ -56,7 +56,7 @@ Raw 缓存仅保存同 provider/session/原 seq 的已准备 code points 与 cap
 
 ## 分页快照与追踪
 
-本包的 query peer 固定为已验证的 `@deepseek-ai/dsh-session-query 0.1.7-rc.2-fork2`，开发依赖使用对应不可变 tarball；不声明未验证版本的兼容范围。运行时要求公开 `pageSessions`、`pageEvents`、`observeSession`，缺失时加载明确失败。其他 DSH peers 保持 0.1.7-rc.2。`session_list` 使用不可变 metadata snapshot cursor，续页保持 scope/limit；新 session 不漂移页。snapshot 内标题来源删除时保留 NOT_FOUND 并提示不带 cursor 重启，不以默认标题掩盖失败。provider 重载、snapshot 超时或淘汰使 cursor 失效。
+本包的 Session core 与 Query peers 分别固定为已验证的 `@deepseek-ai/dsh-session 0.1.7-rc.2-fork1`、`@deepseek-ai/dsh-session-query 0.1.7-rc.2-fork3`；开发依赖使用 Harness `daily-driver-v0.1.7-rc.2-fork16` 的对应不可变 tarball 及 SQLite `0.1.7-rc.2-fork6`。Query 依赖新 Session 的 `SurfaceFoldAccumulator`，不能替换成旧官方 Session；不声明未验证版本的兼容范围。运行时要求公开 `pageSessions`、`pageEvents`、`observeSession`，缺失时加载明确失败。其他 DSH peers 保持 0.1.7-rc.2。`session_list` 使用不可变 metadata snapshot cursor，续页保持 scope/limit；新 session 不漂移页。snapshot 内标题来源删除时保留 NOT_FOUND 并提示不带 cursor 重启，不以默认标题掩盖失败。provider 重载、snapshot 超时或淘汰使 cursor 失效。
 
 两个 trace 工具返回公开服务提供的完整关系，预算不足报错，不截断 links。`session_trace` 在首个隐藏父节点停止 ancestry，并以 scope_limited 标记隐藏关系；先过滤可见节点再对去重后的标题使用与 List/Search 相同的 helper。cache hint 保留 title_cached:true。
 
@@ -80,7 +80,7 @@ reader 可传入 `options.evidence.pageSourceSeqs`、`coverageComplete`、`incom
 
 ## Build and handoff
 
-Use Node 22.19+ or 24+ and pnpm. Prepare the pinned query/SQLite dependencies with `pnpm install --frozen-lockfile`, then run `pnpm --config.verify-deps-before-run=false check`. The tarball contains built ESM, declarations, README and MIT license. This ordinary plugin has no bundle patch; consumers declare its row explicitly. Its Cordis/DSH service peers use the Host instances through the public profile resolver; Schemastery must match the Host version and pass Host Config validation.
+Use Node 22.19+ or 24+ and pnpm. Version 0.1.5 uses the verified Session core fork1 / Query fork3 / SQLite fork6 artifacts. Prepare the pinned Session/query/SQLite dependencies with `pnpm install --frozen-lockfile`, then run `pnpm --config.verify-deps-before-run=false check`. The tarball contains built ESM, declarations, README and MIT license. This ordinary plugin has no bundle patch; consumers declare its row explicitly. Its Cordis/DSH service peers use the Host instances through the public profile resolver; Schemastery must match the Host version and pass Host Config validation.
 
 `tests/pack-smoke.mjs` checks packaging with explicitly installed peers; `deploy/activate.test.mjs` exercises Host-provided peers without direct profile dependencies. Personal installation and artifact-test procedures are maintained in [dsh-config](../dsh-config/README.md).
 

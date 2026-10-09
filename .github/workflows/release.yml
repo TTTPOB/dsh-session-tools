@@ -8,7 +8,7 @@ on:
       tag:
         description: Existing immutable source tag to publish
         required: true
-        default: v0.1.4
+        default: v0.1.5
         type: string
 
 permissions:
@@ -44,7 +44,7 @@ jobs:
         run: pnpm --config.verify-deps-before-run=false check
       - name: Verify packaged entry and create asset
         run: |
-          node tests/pack-smoke.mjs https://github.com/TTTPOB/deepseek-harness/releases/download/daily-driver-v0.1.7-rc.2-fork12/deepseek-ai-dsh-session-query-0.1.7-rc.2-fork2.tgz
+          node tests/pack-smoke.mjs
           pnpm --config.verify-deps-before-run=false pack --pack-destination dist/release
           (cd dist/release && sha256sum dsh-session-tools-*.tgz > SHA256SUMS)
       - name: Publish immutable assets
@@ -58,4 +58,4 @@ jobs:
             exit 1
           fi
           version=$(node -p 'JSON.parse(require("fs").readFileSync("package.json")).version')
-          gh release create "$RELEASE_TAG" "dist/release/dsh-session-tools-$version.tgz" dist/release/SHA256SUMS --verify-tag --title "$RELEASE_TAG" --notes 'Exclude archived sessions from session_search by default. Set include_archived:true only when explicitly needed; returned search items expose archived state. Keeps indexed queries and cursor continuation, using Host workspaceRegistry for archive state. Requires the existing query fork2/SQLite fork5 combination and official workspace service rc.2. Daily-driver configuration selects the immutable asset and records verified compatibility for update --apply.'
+          gh release create "$RELEASE_TAG" "dist/release/dsh-session-tools-$version.tgz" dist/release/SHA256SUMS --verify-tag --title "$RELEASE_TAG" --notes 'Shared Compact/Detail reading uses one fixed SessionObservation with bounded supplemental reads, processing and output budgets; explicit Raw preserves exact events and Unicode continuation. Indexed surface-aware search retains provider cursors, archived-session filtering and zero-I/O cached title hints without log-scan fallback. Pins the verified Session core fork1 and Query fork3 peers, tested with matching immutable SQLite fork6 artifacts and the real Cordis Loader. Other DSH service peers remain rc.2.'
