@@ -56,7 +56,7 @@ Raw 缓存仅保存同 provider/session/原 seq 的已准备 code points 与 cap
 
 ## 分页快照与追踪
 
-本包要求提供公开 `pageSessions`、`pageEvents`、`observeSession` 的 `@deepseek-ai/dsh-session-query 0.1.7-rc.2-fork2` 或兼容 engine；缺失时加载明确失败。其他 DSH peers 保持 0.1.7-rc.2。`session_list` 使用不可变 metadata snapshot cursor，续页保持 scope/limit；新 session 不漂移页。snapshot 内标题来源删除时保留 NOT_FOUND 并提示不带 cursor 重启，不以默认标题掩盖失败。provider 重载、snapshot 超时或淘汰使 cursor 失效。
+本包的 query peer 固定为已验证的 `@deepseek-ai/dsh-session-query 0.1.7-rc.2-fork2`，开发依赖使用对应不可变 tarball；不声明未验证版本的兼容范围。运行时要求公开 `pageSessions`、`pageEvents`、`observeSession`，缺失时加载明确失败。其他 DSH peers 保持 0.1.7-rc.2。`session_list` 使用不可变 metadata snapshot cursor，续页保持 scope/limit；新 session 不漂移页。snapshot 内标题来源删除时保留 NOT_FOUND 并提示不带 cursor 重启，不以默认标题掩盖失败。provider 重载、snapshot 超时或淘汰使 cursor 失效。
 
 两个 trace 工具返回公开服务提供的完整关系，预算不足报错，不截断 links。`session_trace` 在首个隐藏父节点停止 ancestry，并以 scope_limited 标记隐藏关系；先过滤可见节点再对去重后的标题使用与 List/Search 相同的 helper。cache hint 保留 title_cached:true。
 
