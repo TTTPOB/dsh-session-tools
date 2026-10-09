@@ -32,6 +32,16 @@ Config (Schemastery defaults): `pageSize: 30`, `maxPageSize: 100`, `previewChars
 
 大事件分片缓存由插件 effect 拥有，仅保存同 provider、session ID、原始 seq 的已准备 Unicode code points。首次读取或 `offset_chars: 0` 会重新 exact read；后续分片复用固定 snapshot，每次仍检查 target 的当前项目授权和 snapshot header。replacement 是追加的其他 seq，不改变被读原始 seq；读取 replacement 需使用其新 seq。缓存采用 LRU，受条数和估算内存 bytes 双界限制（序列化 UTF-8、point 字符串和数组槽位）；任一容量为 0 可禁用，单个超容量事件不保留。淘汰后的续页会重新准备；插件 dispose/HMR 会清空缓存，进行中的旧调用不能重新填充。未显式请求分片的小事件直接返回原始 JSON，不建立 prepared cache。
 
+## 内部历史关联与投影模型
+
+[src/event-association.ts](src/event-association.ts) 的 `associateEvents(events)` 接受同一次读取已取得的逻辑事件，返回共享的 `activities`、`activityBySeq`、`toolBySeq` 与 `tools`。它只做内存计算：同一显式 turn/step 的助手和工具组成 Step，callId 去重配对，执行记录拥有参数证据；PTC 使用 subCallId 和直接 parentCallId，沿已核实根调用继承 Step。找不到根或直接父链的片段独立保留，缺少结算只表示未观察到结果。压缩、重试、workflow、命令及审批使用各自真实身份，workflow 的成员 seq 不作为 Session seq；缺身份的事件不按相邻位置归组。
+
+[src/event-projection.ts](src/event-projection.ts) 提供 `projectActivity(model, activity, options)` 和 `projectTarget(model, seq, options)`。`options.view` 为 compact/detail；两者消费同一关联结果。target 只展示目标记录或自身工具配对，返回已知 activity/root/parent locator，不展开父、兄弟或子调用；activity 才展示工具树。普通工具展示原 append 结果；仅单目标 replacement 的明确来源及相同替换端点可以定位原结果。summary/checkpoint 保留独立语义，所有记录保留原 seq/read_seq 和实际来源；本模块不提供 Raw 或改变 Raw 的 requested seq。
+
+调用方显式提供 `options.budget`：`maxStringChars`（Unicode code points）、`maxItems`、`maxDepth`、`maxNodes` 和最终 JSON UTF-8 `outputBytes`。预览先有界访问原字段，再序列化有限结果；字段名超限的预览字段省略。最终预算不足时继续省略预览，保留身份、关系、seq、已观察到的错误与工具增删事实；最小元数据仍超限则抛错。这里没有已校准默认值，读取及展示预算仍需完整 reader 功能完成后用本机历史校准。
+
+reader 可传入 `options.evidence.pageSourceSeqs`、`coverageComplete`、`incompleteReasons`：页内来源不会因补读而增加，Activity 未有读取覆盖证据时保持 incomplete，目标工具缺调用/结果或明确原结果引用时附缺口。`complete` 和正文裁剪的 `truncated` 独立。`coverageComplete` 必须由 reader 的固定 observation 和实际覆盖证明，不能仅因看到首尾边界或一个完整工具对就设为 true。返回值不持有 observation 或执行 I/O，现有公共工具接口在本节之外定义。
+
 ## Build and handoff
 
 Use Node 22.19+ or 24+ and pnpm. Prepare the pinned query/SQLite dependencies with `pnpm install --frozen-lockfile`, then run `pnpm --config.verify-deps-before-run=false check`. The tarball contains built ESM, declarations, README and MIT license. This ordinary plugin has no bundle patch; consumers declare its row explicitly. Its Cordis/DSH service peers use the Host instances through the public profile resolver; Schemastery must match the Host version and pass Host Config validation.
