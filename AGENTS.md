@@ -25,6 +25,10 @@
 - 同时需要 `workspaceRegistry`（来自 `@deepseek-ai/dsh-workspace`）与 query／projection／tool 服务；Cordis 会等待这些服务可用后再注册工具。
 - 大事件分片缓存由插件 effect 拥有；dispose/HMR 清空缓存，进行中的旧调用不得重新填充。
 
+## ADR 状态
+
+采用 Michael Nygard ADR 状态：`Proposed`（提议）、`Accepted`（采纳）、`Deprecated`（弃用）、`Superseded`（被后续决策取代）。`Accepted` 只表示决策已采纳；实施情况单独记录，不以状态推断已实现。各阶段验收后移除对应待确认标签，将确定值写入正文。
+
 ## 验证
 
 ```sh
