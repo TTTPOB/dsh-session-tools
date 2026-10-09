@@ -97,8 +97,8 @@ export function readTools(ctx: Context, options: {
         const event = observation.readEvents(SessionLogOffset(seq), SessionLogOffset(seq + 1))[0]
         if (!event || event.seq !== seq) throw new RangeError('Requested seq is outside the captured observation')
         const json = JSON.stringify(event)
-        const raw = { session_id: sessionId, seq, captured_through_seq: observation.cursor, format: 'event-json', event: JSON.parse(json) as JsonValue, has_more: false, next_offset: null }
-        if (args.offset_chars === undefined && bounded(raw, outputBytes)) return raw
+        const raw = { session_id: sessionId, seq, captured_through_seq: observation.cursor, format: 'event-json', event: event as unknown as JsonValue, has_more: false, next_offset: null }
+        if (args.offset_chars === undefined && bounded(raw, outputBytes)) return { ...raw, event: JSON.parse(json) as JsonValue }
         const points = Array.from(json)
         value = { session: observation.header, capturedThroughSeq: observation.cursor, points, bytes: Buffer.byteLength(json) + json.length * 2 + points.length * 32 }
         exec.signal.throwIfAborted()
