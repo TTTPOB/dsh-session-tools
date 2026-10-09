@@ -138,14 +138,15 @@ function messageBlocks(content: unknown, eventType: string, view: ProjectionOpti
   return { visible, toolChanges, toolCalls }
 }
 
-function previewFields(event: ReadingEvent, view: ProjectionOptions['view'], messagePreview?: unknown): unknown {
+function previewFields(event: ReadingEvent, view: ProjectionOptions['view'], messagePreview?: unknown, toolDefinitions?: unknown): unknown {
   const d = fields(event.data), message = fields(d.message)
   const strategy = EVENT_PROJECTION_STRATEGIES[event.type] ?? 'bounded-fact'
   if (strategy === 'message') {
     const content = event.type === 'user/message' ? d.content : message.content
     const source = event.type === 'user/message' ? d.source : message.source
     return { role: event.type === 'user/message' ? d.role : message.role, source, content: messagePreview, empty: Array.isArray(content) && content.length === 0,
-      interrupted: d.interrupted, usage: view === 'detail' ? d.usage : undefined }
+      interrupted: d.interrupted, usage: view === 'detail' ? d.usage : undefined,
+      ...toolDefinitions === undefined ? {} : { tools: toolDefinitions } }
   }
   if (strategy === 'attempt') return { committed_message: false, turn: d.turn, step: d.step, stream_observed: Array.isArray(d.stream) && d.stream.length > 0 }
   if (strategy === 'tool') return { arguments: d.arguments, content: event.type === 'tool/result' ? message.content : d.content, error: d.error, meta: view === 'detail' ? d.meta : undefined }
@@ -226,12 +227,33 @@ function project(model: EventAssociation, events: readonly ReadingEvent[], tools
       const content = fields(d.message).content
       record.empty = Array.isArray(content) && content.length === 0
     }
-    let messagePreview: unknown
+    let messagePreview: unknown, toolDefinitions: unknown
     if (EVENT_PROJECTION_STRATEGIES[event.type] === 'message') {
       const content = event.type === 'user/message' ? d.content : fields(d.message).content
       const blocks = messageBlocks(content, event.type, options.view, options.budget, expandChildren, () => { output.truncated = true })
       messagePreview = blocks.visible
       if (blocks.toolChanges.length) record.tool_changes = blocks.toolChanges
+      if (event.type === 'developer/message' && typeof d.headerSeq === 'number') {
+        const additions = new Set(blocks.toolChanges.filter(change => fields(change).type === 'tool-addition')
+          .map(change => fields(change).toolName))
+        const header = additions.size ? model.events.get(d.headerSeq) : undefined
+        if (header?.type === 'request/header') {
+          sourceSeqs.add(header.seq)
+          if (options.view === 'detail') {
+            const definitions = fields(fields(header.data).header).tools
+            if (Array.isArray(definitions)) {
+              const selected: unknown[] = []
+              let i = 0
+              for (; i < definitions.length && i < options.budget.maxNodes && additions.size; i++) {
+                const definition = definitions[i], name = fields(definition).name
+                if (additions.delete(name)) selected.push(definition)
+              }
+              if (additions.size && i < definitions.length) output.truncated = true
+              toolDefinitions = selected
+            }
+          }
+        }
+      }
       if (blocks.toolCalls.length) record.tool_calls = blocks.toolCalls
       if (model.limitedBlockSeqs.has(event.seq)) output.truncated = true
     }
@@ -242,7 +264,7 @@ function project(model: EventAssociation, events: readonly ReadingEvent[], tools
     if (event.surfaceOp) record.surface_op = event.surfaceOp === 'append' ? 'append' : { ...event.surfaceOp }
     // Paired execution content belongs to the tool node, not a duplicate record preview.
     if (!(EVENT_PROJECTION_STRATEGIES[event.type] === 'tool' && tools.length))
-      addPreview(previewFields(event, options.view, messagePreview), value => { record.preview = value }, () => { delete record.preview })
+      addPreview(previewFields(event, options.view, messagePreview, toolDefinitions), value => { record.preview = value }, () => { delete record.preview })
     output.records.push(record)
   }
   let renderedNodes = 0

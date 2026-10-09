@@ -7,7 +7,14 @@ const result = (seq, callId, content, extra = {}) => event(seq, 'tool/result', {
   turn: 1, step: 1, message: { ...message('tool', [{ type: 'text', text: content }], { kind: 'tool', callId }), toolCallId: callId, isError: false },
 }, { sourceEventSeqs: [callId === 'second' ? 30 : 21], ...extra })
 
+export const readDefinition = { name: 'read', description: 'Read a UTF-8 file', parameters: { type: 'object', properties: { file_path: { type: 'string' } }, required: ['file_path'] } }
+
 export const history = [
+  event(9, 'request/header', { reason: 'change', header: {
+    config: { provider: 'test', model: 'header-private-route' },
+    tools: [readDefinition, { name: 'unrelated_tool', description: 'Unrelated definition', parameters: { type: 'object' } }],
+    adapterDefaults: { privateOption: 'header-private-default' },
+  } }),
   event(10, 'step/start', { turn: 1, step: 1 }),
   event(12, 'system/message', { turn: 1, step: 1, message: message('system', [], { kind: 'system-prompt' }) }),
   event(14, 'developer/message', { turn: 1, step: 1, headerSeq: 9, message: message('developer', [
