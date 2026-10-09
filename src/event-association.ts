@@ -4,7 +4,7 @@ export interface ReadingEvent {
   readonly type: string
   readonly data: unknown
   readonly sourceEventSeqs?: readonly number[]
-  readonly surfaceOp?: { readonly op: string; readonly startSeq?: number; readonly endSeq?: number }
+  readonly surfaceOp?: 'append' | { readonly op: 'replace'; readonly startSeq: number; readonly endSeq: number }
 }
 
 /** Narrow only the extensible JSON fields consumed by this reader. */
@@ -19,6 +19,7 @@ export interface AssociatedTool {
   parentId?: string
   rootId?: string
   blockEvents: ReadingEvent[]
+  block?: Record<string, unknown>
   call?: ReadingEvent
   result?: ReadingEvent
   children: AssociatedTool[]
@@ -30,6 +31,7 @@ export interface AssociatedActivity {
   kind: 'step' | 'turn' | 'compaction' | 'workflow' | 'retry' | 'command' | 'approval' | 'tool' | 'event' | 'ptc-fragment'
   events: ReadingEvent[]
   tools: AssociatedTool[]
+  toolGaps: Set<string>
 }
 
 export interface EventAssociation {
@@ -40,6 +42,7 @@ export interface EventAssociation {
   tools: Map<string, AssociatedTool>
   /** Only explicit, single-target tool-result replacements; never interval summaries. */
   originalResultByReplacement: Map<number, number>
+  limitedBlockSeqs: Set<number>
 }
 
 export function stepIdentity(event: ReadingEvent): string | undefined {
@@ -59,8 +62,8 @@ export function toolIdentity(event: ReadingEvent): string | undefined {
 export function originalResultReference(event: ReadingEvent): number | undefined {
   const op = event.surfaceOp
   const refs = event.sourceEventSeqs
-  if (event.type === 'tool/result' && op?.op === 'replace' && refs?.length === 1
-    && op.startSeq === refs[0] && op.endSeq === refs[0]) return refs[0]
+  if (event.type === 'tool/result' && op && op !== 'append'
+    && op.startSeq === op.endSeq && refs?.includes(op.startSeq)) return op.startSeq
   return undefined
 }
 
@@ -84,9 +87,10 @@ function lifecycle(event: ReadingEvent): [AssociatedActivity['kind'], string] | 
 /**
  * Associate only supplied evidence, using explicit IDs and direct PTC parents.
  * @param input Accepted events from one fixed observation, including any bounded supplemental reads.
+ * @param budget Existing display limits for inspecting message blocks and diagnostic sources.
  * @returns Shared identities for both densities; missing records remain missing, not running.
  */
-export function associateEvents(input: readonly ReadingEvent[]): EventAssociation {
+export function associateEvents(input: readonly ReadingEvent[], budget: { maxItems: number; maxNodes: number }): EventAssociation {
   const events = new Map(input.map(event => [event.seq, event]))
   const ordered = [...events.values()].sort((a, b) => a.seq - b.seq)
   const activities = new Map<string, AssociatedActivity>()
@@ -94,9 +98,10 @@ export function associateEvents(input: readonly ReadingEvent[]): EventAssociatio
   const toolBySeq = new Map<number, AssociatedTool>()
   const tools = new Map<string, AssociatedTool>()
   const originalResultByReplacement = new Map<number, number>()
+  const limitedBlockSeqs = new Set<number>()
   const getActivity = (id: string, kind: AssociatedActivity['kind']) => {
     let activity = activities.get(id)
-    if (!activity) { activity = { id, kind, events: [], tools: [] }; activities.set(id, activity) }
+    if (!activity) { activity = { id, kind, events: [], tools: [], toolGaps: new Set() }; activities.set(id, activity) }
     return activity
   }
   const getTool = (id: string) => {
@@ -107,18 +112,21 @@ export function associateEvents(input: readonly ReadingEvent[]): EventAssociatio
   for (const event of ordered) {
     const d = fields(event.data)
     const message = fields(d.message)
-    const replacement = event.surfaceOp?.op === 'replace'
+    const replacement = event.surfaceOp !== undefined && event.surfaceOp !== 'append'
     const ref = originalResultReference(event)
     if (ref !== undefined) originalResultByReplacement.set(event.seq, ref)
     if (!replacement && event.type === 'assistant/message' && Array.isArray(message.content)) {
-      for (const value of message.content) {
-        const block = fields(value)
+      let inspected = 0
+      for (; inspected < message.content.length && inspected < budget.maxNodes && inspected < budget.maxItems; inspected++) {
+        const block = fields(message.content[inspected])
         if (block.type !== 'tool-call' || typeof block.id !== 'string') continue
         const tool = getTool(block.id)
         tool.blockEvents.push(event)
+        tool.block ??= block
         if (typeof block.name === 'string') tool.name = block.name
         tool.activityId ??= stepIdentity(event)
       }
+      if (inspected < message.content.length) limitedBlockSeqs.add(event.seq)
     }
     const id = toolIdentity(event)
     if (!replacement && id !== undefined && ['tool/call', 'tool/result', 'tool/ptc-dispatch-start', 'tool/ptc-dispatch'].includes(event.type)) {
@@ -154,10 +162,14 @@ export function associateEvents(input: readonly ReadingEvent[]): EventAssociatio
   for (const event of ordered) {
     const tool = toolBySeq.get(event.seq)
     let activity: AssociatedActivity
-    if (event.surfaceOp?.op === 'replace') {
+    if (event.surfaceOp !== undefined && event.surfaceOp !== 'append') {
       // A summary replacement may cite the compaction start/summary, but never a tool outcome.
-      const cited = (event.sourceEventSeqs ?? []).map(seq => events.get(seq)).find(source =>
-        source?.type === 'compaction/summary' || source?.type === 'compaction/start')
+      let cited: ReadingEvent | undefined
+      const refs = event.sourceEventSeqs ?? []
+      for (let i = 0; i < Math.min(refs.length, budget.maxNodes); i++) {
+        const source = events.get(refs[i])
+        if (source?.type === 'compaction/summary' || source?.type === 'compaction/start') { cited = source; break }
+      }
       const identity = cited && event.type === 'user/message' ? lifecycle(cited) : undefined
       activity = identity ? getActivity(identity[1], identity[0]) : getActivity(`event:${event.seq}`, 'event')
     } else if (tool?.rootId) {
@@ -181,6 +193,7 @@ export function associateEvents(input: readonly ReadingEvent[]): EventAssociatio
       activity = identity ? getActivity(identity[1], identity[0])
         : step && stepMember ? getActivity(step, 'step') : getActivity(`event:${event.seq}`, 'event')
     }
+    if (limitedBlockSeqs.has(event.seq)) activity.toolGaps.add('tool_blocks_not_fully_associated')
     activity.events.push(event)
     activityBySeq.set(event.seq, activity)
   }
@@ -188,11 +201,13 @@ export function associateEvents(input: readonly ReadingEvent[]): EventAssociatio
     const evidence = tool.call ?? tool.result ?? tool.blockEvents[0]
     if (!evidence) continue
     const activity = activityBySeq.get(evidence.seq)!
+    if (!tool.call) activity.toolGaps.add(tool.blockEvents.length ? 'execution_not_observed' : 'call_not_observed')
+    if (!tool.result) activity.toolGaps.add('result_not_observed')
     if (!tool.parentId || !tools.has(tool.parentId) || activityBySeq.get((tools.get(tool.parentId)!.call ?? tools.get(tool.parentId)!.result)?.seq ?? -1) !== activity)
       activity.tools.push(tool)
   }
   const start = (tool: AssociatedTool) => tool.call?.seq ?? tool.blockEvents[0]?.seq ?? tool.result?.seq ?? Infinity
   for (const tool of tools.values()) tool.children.sort((a, b) => start(a) - start(b))
   return { events, activities: [...activities.values()].sort((a, b) => a.events[0].seq - b.events[0].seq),
-    activityBySeq, toolBySeq, tools, originalResultByReplacement }
+    activityBySeq, toolBySeq, tools, originalResultByReplacement, limitedBlockSeqs }
 }

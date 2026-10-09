@@ -110,36 +110,45 @@ function locator(event: ReadingEvent): Record<string, Json> {
     const value = d[key]
     if (typeof value === 'string' || typeof value === 'number') result[key] = value
   }
+  const message = event.type === 'user/message' ? d : fields(d.message)
+  const source = fields(message.source)
+  if (typeof message.id === 'string') result.message_id = message.id
+  if (typeof message.role === 'string') result.role = message.role
+  if (typeof source.kind === 'string') result.source_kind = source.kind
   const id = toolIdentity(event)
   if (id !== undefined) result.call_id = id
   if (event.type.startsWith('tool-workflow/agent-') && typeof d.seq === 'number') result.agent_seq = d.seq
   return result
 }
 
-function previewFields(event: ReadingEvent, view: ProjectionOptions['view'], budget: ProjectionBudget, omitToolCalls: boolean, onTruncated: () => void): unknown {
+function messageBlocks(content: unknown, eventType: string, view: ProjectionOptions['view'], budget: ProjectionBudget, omitToolCalls: boolean, onTruncated: () => void) {
+  const blocks = Array.isArray(content) ? content : []
+  const visible: unknown[] = [], toolChanges: Json[] = [], toolCalls: Json[] = []
+  let inspected = 0
+  for (; inspected < blocks.length && inspected < budget.maxNodes && inspected < budget.maxItems; inspected++) {
+    const block = fields(blocks[inspected])
+    if (block.type === 'tool-addition' || block.type === 'tool-removal')
+      toolChanges.push({ type: block.type, toolName: block.toolName as string })
+    if (block.type === 'tool-call') toolCalls.push({ call_id: block.id as string, name: block.name as string })
+    if (block.type === 'reasoning' || (omitToolCalls && block.type === 'tool-call')) continue
+    if (view === 'detail' || eventType === 'developer/message' || visible.length === 0) visible.push(blocks[inspected])
+    else onTruncated()
+  }
+  if (inspected < blocks.length) onTruncated()
+  return { visible, toolChanges, toolCalls }
+}
+
+function previewFields(event: ReadingEvent, view: ProjectionOptions['view'], messagePreview?: unknown): unknown {
   const d = fields(event.data), message = fields(d.message)
   const strategy = EVENT_PROJECTION_STRATEGIES[event.type] ?? 'bounded-fact'
   if (strategy === 'message') {
     const content = event.type === 'user/message' ? d.content : message.content
     const source = event.type === 'user/message' ? d.source : message.source
-    const blocks = Array.isArray(content) ? content : []
-    // Reasoning and embedded timed streams are not ordinary message body previews.
-    const visible: unknown[] = []
-    for (let i = 0; i < Math.min(blocks.length, budget.maxNodes); i++) {
-      const block = blocks[i]
-      const type = fields(block).type
-      if (type !== 'reasoning' && !(omitToolCalls && type === 'tool-call')) visible.push(block)
-      if (visible.length >= budget.maxItems) {
-        if (i + 1 < blocks.length) onTruncated()
-        break
-      }
-    }
-    if (blocks.length > budget.maxNodes) onTruncated()
-    return { role: message.role ?? 'user', source, content: visible, empty: blocks.length === 0,
+    return { role: event.type === 'user/message' ? d.role : message.role, source, content: messagePreview, empty: Array.isArray(content) && content.length === 0,
       interrupted: d.interrupted, usage: view === 'detail' ? d.usage : undefined }
   }
   if (strategy === 'attempt') return { committed_message: false, turn: d.turn, step: d.step, stream_observed: Array.isArray(d.stream) && d.stream.length > 0 }
-  if (strategy === 'tool') return { arguments: d.arguments, content: d.content ?? message.content, error: d.error, meta: view === 'detail' ? d.meta : undefined }
+  if (strategy === 'tool') return { arguments: d.arguments, content: event.type === 'tool/result' ? message.content : d.content, error: d.error, meta: view === 'detail' ? d.meta : undefined }
   if (strategy === 'summary') return { summary: d.summary, shadowedSeqs: d.shadowedSeqs, shadowedRange: d.shadowedRange,
     shadowedTokenCount: d.shadowedTokenCount, token_estimate: true, provider: d.provider, model: d.model, usage: d.usage }
   if (strategy === 'prune') return { shadowedSeqs: d.shadowedSeqs, shadowedRange: d.shadowedRange, shadowedTokenCount: d.shadowedTokenCount, token_estimate: true }
@@ -187,10 +196,10 @@ function project(model: EventAssociation, events: readonly ReadingEvent[], tools
   expandChildren: boolean, options: ProjectionOptions, activity?: AssociatedActivity, requestedSeq?: number, finish?: (output: EventProjection) => void): EventProjection {
   const omitted: (() => void)[] = []
   const output: EventProjection = { activity_id: activity?.id, kind: activity?.kind, requested_seq: requestedSeq,
-    read_scope: expandChildren ? 'activity' : 'target', source_seqs: [],
+    read_scope: activity ? 'activity' : 'target', source_seqs: [],
     page_source_seqs: [], records: [], tools: [], complete: false, incomplete_reasons: [], truncated: false }
   const sourceSeqs = new Set<number>()
-  const reasons = new Set(options.evidence?.incompleteReasons ?? [])
+  const reasons = new Set([...(options.evidence?.incompleteReasons ?? []), ...(activity?.toolGaps ?? [])])
   const addPreview = (value: unknown, set: (value: Json) => void, remove: () => void) => {
     if (value === undefined) return
     const bounded = bound(value, options.budget)
@@ -203,6 +212,9 @@ function project(model: EventAssociation, events: readonly ReadingEvent[], tools
     const record: ProjectedRecord = { seq: event.seq, type: event.type, read_seq: event.seq,
       strategy: EVENT_PROJECTION_STRATEGIES[event.type] ?? 'bounded-fact', ...locator(event), ...errorFacts(event) }
     const d = fields(event.data)
+    const observedTool = model.toolBySeq.get(event.seq)
+    if (observedTool && !observedTool.call) reasons.add('call_not_observed')
+    if (observedTool && !observedTool.result) reasons.add('result_not_observed')
     if (options.view === 'compact' && (d.meta !== undefined || d.usage !== undefined)) output.truncated = true
     for (const key of ['outcome', 'stopReason', 'kind', 'isError']) {
       const value = d[key]
@@ -214,22 +226,28 @@ function project(model: EventAssociation, events: readonly ReadingEvent[], tools
       const content = fields(d.message).content
       record.empty = Array.isArray(content) && content.length === 0
     }
-    if (event.type === 'developer/message') {
-      const content = fields(d.message).content
-      if (Array.isArray(content)) record.tool_changes = content.filter(block =>
-        ['tool-addition', 'tool-removal'].includes(String(fields(block).type))).map(block => ({
-          type: String(fields(block).type), toolName: String(fields(block).toolName),
-        }))
+    let messagePreview: unknown
+    if (EVENT_PROJECTION_STRATEGIES[event.type] === 'message') {
+      const content = event.type === 'user/message' ? d.content : fields(d.message).content
+      const blocks = messageBlocks(content, event.type, options.view, options.budget, expandChildren, () => { output.truncated = true })
+      messagePreview = blocks.visible
+      if (blocks.toolChanges.length) record.tool_changes = blocks.toolChanges
+      if (blocks.toolCalls.length) record.tool_calls = blocks.toolCalls
+      if (model.limitedBlockSeqs.has(event.seq)) output.truncated = true
     }
     if (event.type.startsWith('tool-workflow/agent-')) record.member_seq_is_not_session_seq = true
     if (event.type === 'subagent/catalog') record.discovery_only = true
     if (event.type === 'llm/retry-started') record.retry_started_is_not_success = true
     if (event.sourceEventSeqs) record.source_event_seqs = [...event.sourceEventSeqs]
-    if (event.surfaceOp) record.surface_op = { ...event.surfaceOp } as Json
-    addPreview(previewFields(event, options.view, options.budget, expandChildren, () => { output.truncated = true }), value => { record.preview = value }, () => { delete record.preview })
+    if (event.surfaceOp) record.surface_op = event.surfaceOp === 'append' ? 'append' : { ...event.surfaceOp }
+    // Paired execution content belongs to the tool node, not a duplicate record preview.
+    if (!(EVENT_PROJECTION_STRATEGIES[event.type] === 'tool' && tools.length))
+      addPreview(previewFields(event, options.view, messagePreview), value => { record.preview = value }, () => { delete record.preview })
     output.records.push(record)
   }
-  const renderTool = (tool: AssociatedTool): ProjectedTool => {
+  let renderedNodes = 0
+  const renderTool = (tool: AssociatedTool, depth: number): ProjectedTool => {
+    renderedNodes++
     const evidence = [...tool.blockEvents, ...(tool.call ? [tool.call] : []), ...(tool.result ? [tool.result] : [])]
     const seqs = [...new Set(evidence.map(event => event.seq))].sort((a, b) => a - b)
     seqs.forEach(seq => sourceSeqs.add(seq))
@@ -239,32 +257,45 @@ function project(model: EventAssociation, events: readonly ReadingEvent[], tools
     if (!tool.call) reasons.add(tool.blockEvents.length ? 'execution_not_observed' : 'call_not_observed')
     if (!tool.result) reasons.add('result_not_observed')
     const callData = fields(tool.call?.data)
-    let block: unknown
-    if (!tool.call) {
-      for (const event of tool.blockEvents) {
-        const content = fields(fields(event.data).message).content
-        if (Array.isArray(content)) block = content.find(value => fields(value).id === tool.id)
-        if (block) break
-      }
-    }
     const argumentsEvidence = tool.call ? callData.arguments
-      : tool.result?.type === 'tool/ptc-dispatch' ? fields(tool.result.data).arguments : fields(block).arguments
-    addPreview(argumentsEvidence, value => { node.arguments = value }, () => { delete node.arguments })
+      : tool.result?.type === 'tool/ptc-dispatch' ? fields(tool.result.data).arguments : tool.block?.arguments
+    if (options.view === 'detail') addPreview(argumentsEvidence, value => { node.arguments = value }, () => { delete node.arguments })
+    else if (argumentsEvidence !== undefined) output.truncated = true
     if (tool.result) {
       const d = fields(tool.result.data), message = fields(d.message)
-      node.is_error = d.isError === true || message.isError === true
+      node.is_error = tool.result.type === 'tool/result' ? message.isError === true : d.isError === true
       Object.assign(node, errorFacts(tool.result))
-      addPreview(d.content ?? message.content, value => { node.result = value }, () => { delete node.result })
-      addPreview(d.error, value => { node.error = value }, () => { delete node.error })
-      if (options.view === 'detail') addPreview(d.meta, value => { node.meta = value }, () => { delete node.meta })
+      const content = tool.result.type === 'tool/result' ? message.content : d.content
+      let resultPreview = content
+      if (options.view === 'compact' && Array.isArray(content)) {
+        const count = Math.min(content.length, 1, options.budget.maxItems, options.budget.maxNodes)
+        resultPreview = content.slice(0, count)
+        if (count < content.length) output.truncated = true
+      }
+      addPreview(resultPreview, value => { node.result = value }, () => { delete node.result })
+      if (options.view === 'detail') {
+        addPreview(d.error, value => { node.error = value }, () => { delete node.error })
+        addPreview(d.meta, value => { node.meta = value }, () => { delete node.meta })
+      } else if (d.error !== undefined || d.meta !== undefined) output.truncated = true
     }
-    if (expandChildren && tool.children.length) node.children = tool.children.map(renderTool)
+    if (expandChildren && tool.children.length) {
+      if (depth >= options.budget.maxDepth) output.truncated = true
+      else node.children = renderTools(tool.children, depth + 1)
+    }
     return node
   }
-  output.tools = tools.map(renderTool)
+  const renderTools = (nodes: readonly AssociatedTool[], depth: number): ProjectedTool[] => {
+    const rendered: ProjectedTool[] = []
+    let i = 0
+    for (; i < nodes.length && i < options.budget.maxItems && renderedNodes < options.budget.maxNodes; i++)
+      rendered.push(renderTool(nodes[i], depth))
+    if (i < nodes.length) output.truncated = true
+    return rendered
+  }
+  output.tools = renderTools(tools, 0)
   output.source_seqs = [...sourceSeqs].sort((a, b) => a - b)
   output.page_source_seqs = (options.evidence?.pageSourceSeqs ?? []).filter(seq => sourceSeqs.has(seq))
-  if (expandChildren && !options.evidence?.coverageComplete) reasons.add('activity_coverage_unproven')
+  if (activity && !options.evidence?.coverageComplete) reasons.add('activity_coverage_unproven')
   if (expandChildren && activity) {
     const pairs: Partial<Record<AssociatedActivity['kind'], readonly string[]>> = {
       step: ['step/start', 'step/end'], turn: ['turn/start', 'turn/end'],
@@ -290,7 +321,6 @@ function project(model: EventAssociation, events: readonly ReadingEvent[], tools
   }
   if (!expandChildren) {
     const targetTool = tools[0]
-    if (targetTool?.rootId && !model.tools.has(targetTool.rootId)) reasons.add('root_not_observed')
     // A known locator does not require reading the parent's body or its other children.
     if (targetTool) output.activity_locator = { activity_id: targetTool.activityId,
       root_call_id: targetTool.rootId, parent_call_id: targetTool.parentId }
@@ -310,28 +340,50 @@ function project(model: EventAssociation, events: readonly ReadingEvent[], tools
 
 /** Project one shared activity without changing its identities at either density. */
 export function projectActivity(model: EventAssociation, activity: AssociatedActivity, options: ProjectionOptions): EventProjection {
+  const anchor = activity.events[0]
+  if (activity.events.length === 1 && model.originalResultByReplacement.has(anchor.seq))
+    return projectOne(model, anchor.seq, options, activity)
   return project(model, activity.events, activity.tools, true, options, activity)
 }
 
-/** Project only the requested record or tool pair; never expand parents, siblings or children. */
-export function projectTarget(model: EventAssociation, seq: number, options: ProjectionOptions): EventProjection {
+function projectOne(model: EventAssociation, seq: number, options: ProjectionOptions, activity?: AssociatedActivity): EventProjection {
   const event = model.events.get(seq)
   if (!event) throw new Error(`Requested seq ${seq} was not supplied`)
   let tool = model.toolBySeq.get(seq)
   const originalSeq = model.originalResultByReplacement.get(seq)
+  let resolvedOriginalSeq: number | undefined
+  const references: ReadingEvent[] = []
   if (originalSeq !== undefined) {
-    const original = model.events.get(originalSeq)
-    if (original?.type === 'tool/result' && !original.surfaceOp && toolIdentity(original) === toolIdentity(event)) tool = model.toolBySeq.get(originalSeq)
+    let reference = originalSeq
+    // Only same-call single-node references lead back to an actual append result.
+    for (let depth = 0; depth < Math.min(options.budget.maxDepth, options.budget.maxNodes); depth++) {
+      const original = model.events.get(reference)
+      if (original?.type !== 'tool/result' || toolIdentity(original) !== toolIdentity(event)) break
+      references.push(original)
+      if (original.surfaceOp === 'append') {
+        tool = model.toolBySeq.get(reference)
+        resolvedOriginalSeq = reference
+        break
+      }
+      const next = model.originalResultByReplacement.get(reference)
+      if (next === undefined) break
+      reference = next
+    }
   }
-  return project(model, [event], tool ? [tool] : [], false, options, undefined, seq, output => {
+  return project(model, [event, ...references], tool ? [tool] : [], false, options, activity, activity ? undefined : seq, output => {
     if (originalSeq !== undefined) {
-      output.records[0].original_result_seq = originalSeq
+      output.records[0].original_result_seq = resolvedOriginalSeq ?? originalSeq
       if (!tool) {
         output.complete = false
         output.incomplete_reasons.push('original_result_not_observed')
       }
     }
-    const activity = model.activityBySeq.get(seq)
-    if (!output.activity_locator && activity && activity.kind !== 'event') output.activity_locator = { activity_id: activity.id }
+    const associated = model.activityBySeq.get(seq)
+    if (!output.activity_locator && associated && associated.kind !== 'event') output.activity_locator = { activity_id: associated.id }
   })
+}
+
+/** Project only the requested record or tool pair; never expand parents, siblings or children. */
+export function projectTarget(model: EventAssociation, seq: number, options: ProjectionOptions): EventProjection {
+  return projectOne(model, seq, options)
 }

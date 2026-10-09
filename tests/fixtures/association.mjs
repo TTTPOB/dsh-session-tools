@@ -1,9 +1,11 @@
 // Small producer-shaped history covering related records and independent facts.
-const event = (seq, type, data, extra = {}) => ({ seq, type, data, ...extra })
-const message = (role, content, source = { kind: role === 'assistant' ? 'model' : role }) => ({ role, id: `m-${role}`, source, content })
+const surfaceTypes = new Set(['system/message', 'developer/message', 'user/message', 'assistant/message', 'tool/result'])
+const event = (seq, type, data, extra = {}) => ({ seq, type, data, ...(surfaceTypes.has(type) ? { surfaceOp: 'append' } : {}), ...extra })
+let messageId = 0
+const message = (role, content, source = role === 'assistant' ? { kind: 'model', provider: 'test', model: 'fixture' } : { kind: role === 'developer' ? 'tool-registry' : role }) => ({ role, id: `m-${messageId++}`, source, content })
 const result = (seq, callId, content, extra = {}) => event(seq, 'tool/result', {
   turn: 1, step: 1, message: { ...message('tool', [{ type: 'text', text: content }], { kind: 'tool', callId }), toolCallId: callId, isError: false },
-}, extra)
+}, { sourceEventSeqs: [callId === 'second' ? 30 : 21], ...extra })
 
 export const history = [
   event(10, 'step/start', { turn: 1, step: 1 }),
@@ -24,7 +26,7 @@ export const history = [
   event(25, 'tool/ptc-dispatch-start', { subCallId: 'nested', rootCallId: 'root', parentCallId: 'a', name: 'read', arguments: { file_path: 'missing' } }),
   event(26, 'tool/ptc-dispatch', { subCallId: 'b', rootCallId: 'root', parentCallId: 'root', name: 'read', arguments: { file_path: 'other' }, isError: false, content: [{ type: 'text', text: 'other result' }] }),
   event(27, 'tool/ptc-dispatch', { subCallId: 'nested', rootCallId: 'root', parentCallId: 'a', name: 'read', arguments: { file_path: 'missing' }, isError: true,
-    content: [{ type: 'text', text: '不存在' }], error: { name: 'FileError', code: 'FS_NOT_FOUND', reason: 'long diagnostic '.repeat(100) } }),
+    content: [{ type: 'text', text: '不存在' }, { type: 'text', text: 'second diagnostic block' }], error: { name: 'FileError', code: 'FS_NOT_FOUND', reason: 'long diagnostic '.repeat(100) } }),
   event(28, 'tool/ptc-dispatch', { subCallId: 'a', rootCallId: 'root', parentCallId: 'root', name: 'run_code', arguments: { code: 'nested' }, isError: false, content: [{ type: 'text', text: 'caught child error' }] }),
   event(30, 'tool/call', { turn: 1, step: 1, callId: 'second', name: 'read', arguments: 'actual second arguments' }),
   result(31, 'second', 'second original'),
@@ -32,15 +34,18 @@ export const history = [
   event(41, 'step/end', { turn: 1, step: 1 }),
   event(70, 'tool/ptc-dispatch-start', { subCallId: 'orphan', rootCallId: 'missing-root', parentCallId: 'missing-root', name: 'read', arguments: { file_path: 'orphan' } }),
   event(71, 'tool/ptc-dispatch-start', { subCallId: 'separate', rootCallId: 'missing-root', parentCallId: 'missing-parent', name: 'read', arguments: {} }),
-  result(90, 'root', 'PRUNED output', { surfaceOp: { op: 'replace', startSeq: 40, endSeq: 40 }, sourceEventSeqs: [40] }),
+  event(89, 'compaction/prune', { shadowedRange: { start: 40, end: 40 }, shadowedSeqs: [40], shadowedTokenCount: 100 }),
+  result(90, 'root', 'PRUNED output', { surfaceOp: { op: 'replace', startSeq: 40, endSeq: 40 }, sourceEventSeqs: [40, 89] }),
+  event(91, 'compaction/prune', { shadowedRange: { start: 90, end: 90 }, shadowedSeqs: [90], shadowedTokenCount: 20 }),
+  result(92, 'root', 'PRUNED again', { surfaceOp: { op: 'replace', startSeq: 90, endSeq: 90 }, sourceEventSeqs: [90, 91] }),
   event(100, 'compaction/start', { compactionId: 'compact', turn: null }),
-  event(101, 'compaction/summary', { compactionId: 'compact', summary: [{ type: 'text', text: 'SUMMARY, not execution output' }], shadowedSeqs: [20, 31, 90], shadowedRange: { start: 20, end: 90 } }),
-  event(102, 'user/message', { ...message('user', [{ type: 'text', text: 'summary checkpoint' }], { kind: 'compaction' }) }, { surfaceOp: { op: 'replace', startSeq: 20, endSeq: 90 }, sourceEventSeqs: [100, 101, 20, 31, 90] }),
+  event(101, 'compaction/summary', { compactionId: 'compact', summary: [{ type: 'text', text: 'SUMMARY, not execution output' }], shadowedSeqs: [20, 31, 92], shadowedRange: { start: 20, end: 92 }, shadowedTokenCount: 150, provider: 'test', model: 'fixture' }),
+  event(102, 'user/message', { ...message('user', [{ type: 'text', text: 'summary checkpoint' }], { kind: 'compact-checkpoint', compactionId: 'compact' }) }, { surfaceOp: { op: 'replace', startSeq: 20, endSeq: 92 }, sourceEventSeqs: [100, 101, 20, 31, 92] }),
   event(103, 'compaction/end', { compactionId: 'compact', turn: null }),
   event(104, 'compaction/start', { compactionId: 'failed', turn: null }),
   event(105, 'compaction/end', { compactionId: 'failed', turn: null, error: 'summary failed' }),
-  event(110, 'llm/retry', { retryId: 'retry-a', turn: 2, step: 1, retry: 1, delayMs: 50, failure: { code: 'RATE_LIMIT', reason: 'provider details' } }),
-  event(111, 'assistant/attempt', { turn: 2, step: 1, stream: [{ type: 'failed' }] }),
+  event(110, 'llm/retry', { retryId: 'retry-a', turn: 2, step: 1, provider: 'test', mode: 'normal', policyKey: 'rate-limit', retry: 1, maxRetries: 3, delayMs: 50, failure: { code: 'RATE_LIMIT', message: 'provider details', status: 429 } }),
+  event(111, 'assistant/attempt', { turn: 2, step: 1, stream: [{ type: 'chunk', time: 1, chunk: { type: 'finish', reason: { kind: 'error', failure: { code: 'RATE_LIMIT', message: 'provider details' } } } }] }),
   event(112, 'llm/retry-started', { retryId: 'retry-a', turn: 2, step: 1, retry: 1 }),
   event(120, 'tool-workflow/run-start', { runId: 'wf', name: 'analysis' }),
   event(121, 'tool-workflow/agent-start', { runId: 'wf', seq: 0, childId: 'child', label: 'part' }),
@@ -51,6 +56,19 @@ export const history = [
   event(150, 'hook/invoked', { handlerId: 'hook', point: 'pre-step' }),
   event(151, 'hook/result', { handlerId: 'hook', point: 'pre-step', exitCode: 1, stderrSummary: 'failure' }),
 ]
+
+// Instrument array access without changing any producer fields.
+export function guardedBlocks(blocks, limit) {
+  let visits = 0
+  const content = new Proxy(blocks, { get(target, key, receiver) {
+    if (typeof key === 'string' && /^\d+$/.test(key)) {
+      if (Number(key) >= limit) throw new Error('visited beyond the block budget')
+      visits++
+    }
+    return Reflect.get(target, key, receiver)
+  } })
+  return { content, get visits() { return visits } }
+}
 
 export const compact = { view: 'compact', budget: { maxStringChars: 32, maxItems: 8, maxDepth: 5, maxNodes: 100, outputBytes: 30000 } }
 export const detail = { view: 'detail', budget: { maxStringChars: 256, maxItems: 16, maxDepth: 8, maxNodes: 300, outputBytes: 50000 } }

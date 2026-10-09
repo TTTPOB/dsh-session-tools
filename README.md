@@ -34,11 +34,13 @@ Config (Schemastery defaults): `pageSize: 30`, `maxPageSize: 100`, `previewChars
 
 ## 内部历史关联与投影模型
 
-[src/event-association.ts](src/event-association.ts) 的 `associateEvents(events)` 接受同一次读取已取得的逻辑事件，返回共享的 `activities`、`activityBySeq`、`toolBySeq` 与 `tools`。它只做内存计算：同一显式 turn/step 的助手和工具组成 Step，callId 去重配对，执行记录拥有参数证据；PTC 使用 subCallId 和直接 parentCallId，沿已核实根调用继承 Step。找不到根或直接父链的片段独立保留，缺少结算只表示未观察到结果。压缩、重试、workflow、命令及审批使用各自真实身份，workflow 的成员 seq 不作为 Session seq；缺身份的事件不按相邻位置归组。
+[src/event-association.ts](src/event-association.ts) 的 `associateEvents(events, budget)` 接受同一次读取已取得的逻辑事件及现有预算，返回共享的 `activities`、`activityBySeq`、`toolBySeq` 与 `tools`。关联时以 `maxItems`／`maxNodes` 限制助手调用块的实际访问，并保存已发现块的直接参数证据；Compact 和 Detail 复用同一关联结果和关联预算。被略过的调用块以 `limitedBlockSeqs` 及活动的 `tool_blocks_not_fully_associated` 缺口保留，不能据此声称整个活动已读齐。同一显式 turn/step 的助手和工具组成 Step，callId 去重配对，执行记录拥有参数证据；PTC 使用 subCallId 和直接 parentCallId，沿已核实根调用继承 Step。找不到根或直接父链的片段独立保留，缺少结算只表示未观察到结果。压缩、重试、workflow、命令及审批使用各自真实身份，workflow 的成员 seq 不作为 Session seq。
 
-[src/event-projection.ts](src/event-projection.ts) 提供 `projectActivity(model, activity, options)` 和 `projectTarget(model, seq, options)`。`options.view` 为 compact/detail；两者消费同一关联结果。target 只展示目标记录或自身工具配对，返回已知 activity/root/parent locator，不展开父、兄弟或子调用；activity 才展示工具树。普通工具展示原 append 结果；仅单目标 replacement 的明确来源及相同替换端点可以定位原结果。summary/checkpoint 保留独立语义，所有记录保留原 seq/read_seq 和实际来源；本模块不提供 Raw 或改变 Raw 的 requested seq。
+[src/event-projection.ts](src/event-projection.ts) 提供 `projectActivity(model, activity, options)` 和 `projectTarget(model, seq, options)`。target 只展示目标记录或自身工具配对，返回已知 activity/root/parent locator；目标配对和必要引用齐全时，未请求的根、父、兄弟或子调用不算缺失或展示截断。activity 才展示工具树。普通工具展示真实 `surfaceOp: "append"` 的原结果；只有 tool/result replacement 的明确单节点 startSeq/endSeq 引用可在 `maxDepth`／`maxNodes` 内递归定位同一调用的 append 结果。source 集合允许包含额外诊断，不等于被覆盖的节点数。单目标 replacement 的独立活动锚点与 target 复用原结果定位，保留 replacement 自身入口及活动身份，只展示该调用、不扩展其整个 Step。summary/checkpoint 保留独立语义；目标记录和已定位引用保留 seq/read_seq、surface metadata、实际来源与原结果 locator，不重复展开工具节点已展示的参数和结果。本模块不提供 Raw 或改变 Raw 的 requested seq。
 
-调用方显式提供 `options.budget`：`maxStringChars`（Unicode code points）、`maxItems`、`maxDepth`、`maxNodes` 和最终 JSON UTF-8 `outputBytes`。预览先有界访问原字段，再序列化有限结果；字段名超限的预览字段省略。最终预算不足时继续省略预览，保留身份、关系、seq、已观察到的错误与工具增删事实；最小元数据仍超限则抛错。这里没有已校准默认值，读取及展示预算仍需完整 reader 功能完成后用本机历史校准。
+`options.view` 为 compact/detail。相同预算下，Compact 保留首个可见消息块和首个工具结果块、省略工具参数及错误正文；Detail 展示有界多块内容、参数、错误和 meta。两者保留角色、消息／调用身份、来源类别、工具增删事实及各层错误存在、code 和 seq；Compact 的内容省略标记 `truncated`，不会改变已核实的配对和身份。Reasoning 和嵌入 stream 不作为普通消息正文展开。
+
+调用方显式提供 `options.budget`：`maxStringChars`（Unicode code points）、`maxItems`、`maxDepth`、`maxNodes` 和最终 JSON UTF-8 `outputBytes`。消息和 developer 工具增删块的实际访问受 maxItems／maxNodes 限制；工具树受每层 maxItems、总 maxNodes 和 maxDepth 限制，达到上限后不访问剩余节点。预览先有界访问原字段，再序列化有限结果；字段名超限的预览字段省略。最终预算不足时继续省略预览，保留身份、seq、已发现错误及其 Raw 入口；树节点省略后，记录证据仍保留已发现的错误，关联阶段已知配对缺口仍影响完整性。最小元数据仍超限则抛错。reader 仍负责约束传入的事件数、读取字节和跨度；这里没有已校准默认值，限额需完整 reader 功能完成后用本机历史校准。
 
 reader 可传入 `options.evidence.pageSourceSeqs`、`coverageComplete`、`incompleteReasons`：页内来源不会因补读而增加，Activity 未有读取覆盖证据时保持 incomplete，目标工具缺调用/结果或明确原结果引用时附缺口。`complete` 和正文裁剪的 `truncated` 独立。`coverageComplete` 必须由 reader 的固定 observation 和实际覆盖证明，不能仅因看到首尾边界或一个完整工具对就设为 true。返回值不持有 observation 或执行 I/O，现有公共工具接口在本节之外定义。
 

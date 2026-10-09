@@ -2,9 +2,10 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { associateEvents } from '../dist/event-association.js'
 import { EVENT_PROJECTION_STRATEGIES, projectActivity, projectTarget } from '../dist/event-projection.js'
-import { history, compact, detail } from './fixtures/association.mjs'
+import { history, compact, detail, guardedBlocks } from './fixtures/association.mjs'
 
-const model = associateEvents(history)
+const associate = events => associateEvents(events, detail.budget)
+const model = associate(history)
 const activity = seq => model.activityBySeq.get(seq)
 const options = (base, evidence = {}) => ({ ...base, evidence })
 
@@ -19,7 +20,8 @@ test('Step identity, executed arguments, direct parallel PTC tree and independen
   assert.ok(!small.source_seqs.includes(23))
   assert.equal(small.tools.length, 3)
   const root = small.tools.find(tool => tool.call_id === 'root')
-  assert.equal(root.arguments, 'execution arguments')
+  assert.equal(root.arguments, undefined)
+  assert.equal(large.tools.find(tool => tool.call_id === 'root').arguments, 'execution arguments')
   assert.equal(root.is_error, false)
   assert.deepEqual(root.children.map(tool => tool.call_id), ['a', 'b'])
   assert.equal(root.children[0].result_seq, 28)
@@ -47,7 +49,8 @@ test('target is just one pair and known locators, independent of density and PTC
     assert.deepEqual(child.source_seqs, [25, 27])
     assert.deepEqual(child.tools.map(tool => tool.call_id), ['nested'])
     assert.equal(child.tools[0].children, undefined)
-    assert.equal(child.tools[0].arguments.file_path, 'missing')
+    if (view.view === 'detail') assert.equal(child.tools[0].arguments.file_path, 'missing')
+    else assert.equal(child.tools[0].arguments, undefined)
     assert.equal(child.activity_locator.root_call_id, 'root')
     assert.equal(child.activity_locator.activity_id, 'step:1:1')
     assert.equal(child.complete, true)
@@ -59,24 +62,43 @@ test('target is just one pair and known locators, independent of density and PTC
   const assistant = projectTarget(model, 20, detail)
   assert.equal(assistant.tools.length, 0)
   assert.equal(assistant.records[0].preview.content.filter(block => block.type === 'tool-call').length, 3)
-  const idOnly = associateEvents([
-    { seq: 1, type: 'tool/call', data: { callId: 'id-only', arguments: 'recorded', name: 'read' } },
-    { seq: 2, type: 'tool/result', data: { message: { source: { callId: 'id-only' }, content: [] } } },
-  ])
-  assert.equal(idOnly.activityBySeq.get(1), idOnly.activityBySeq.get(2))
-  assert.equal(projectTarget(idOnly, 2, detail).complete, true)
-  const partial = associateEvents(history.filter(event => [25, 27].includes(event.seq)))
+  const partial = associate(history.filter(event => [25, 27].includes(event.seq)))
   const fragment = projectTarget(partial, 27, detail)
   assert.equal(fragment.activity_locator.root_call_id, 'root')
   assert.equal(fragment.tools[0].is_error, true)
-  assert.ok(fragment.incomplete_reasons.includes('root_not_observed'))
-  const resultOnly = associateEvents(history.filter(event => event.seq === 27))
+  assert.equal(fragment.complete, true)
+  assert.deepEqual(fragment.incomplete_reasons, [])
+  const shortPair = associate(history.filter(event => [24, 26].includes(event.seq)))
+  const independent = projectTarget(shortPair, 26, detail)
+  assert.equal(independent.activity_locator.root_call_id, 'root')
+  assert.equal(independent.activity_locator.activity_id, undefined)
+  assert.equal(independent.complete, true)
+  assert.equal(independent.truncated, false)
+  assert.deepEqual(independent.source_seqs, [24, 26])
+  const resultOnly = associate(history.filter(event => event.seq === 27))
   assert.equal(projectTarget(resultOnly, 27, detail).tools[0].arguments.file_path, 'missing')
 })
 
 test('append result wins; only a single explicit replacement reference locates it, summaries stay summaries', () => {
   const root = projectTarget(model, 40, detail)
   assert.ok(JSON.stringify(root.tools[0].result).includes('Original execution output'))
+  assert.equal(root.records[0].surface_op, 'append')
+  assert.equal(root.records[0].preview, undefined)
+  const identicalBudget = { ...detail, view: 'compact' }
+  const concise = projectTarget(model, 27, identicalBudget)
+  const expanded = projectTarget(model, 27, detail)
+  assert.equal(concise.tools[0].arguments, undefined)
+  assert.equal(concise.tools[0].error, undefined)
+  assert.equal(concise.tools[0].error_code, expanded.tools[0].error_code)
+  assert.equal(concise.tools[0].result.length, 1)
+  assert.equal(expanded.tools[0].result.length, 2)
+  assert.deepEqual(concise.source_seqs, expanded.source_seqs)
+  assert.equal(concise.complete, expanded.complete)
+  assert.equal(concise.truncated, true)
+  const conciseMessage = projectTarget(model, 20, identicalBudget)
+  assert.equal(conciseMessage.records[0].preview.content.length, 1)
+  assert.equal(projectTarget(model, 20, detail).records[0].preview.content.length, 4)
+  assert.deepEqual(conciseMessage.records[0].tool_calls.map(call => call.call_id), ['root', 'second', 'undispatched'])
   assert.ok(!JSON.stringify(root).includes('PRUNED'))
   const replacement = projectTarget(model, 90, detail)
   assert.equal(replacement.requested_seq, 90)
@@ -85,10 +107,36 @@ test('append result wins; only a single explicit replacement reference locates i
   assert.equal(replacement.tools[0].result_seq, 40)
   assert.ok(JSON.stringify(replacement.tools[0].result).includes('Original execution output'))
   assert.deepEqual(replacement.source_seqs, [20, 21, 40, 90])
-  const unavailable = projectTarget(associateEvents(history.filter(event => event.seq === 90)), 90, detail)
+  const unavailable = projectTarget(associate(history.filter(event => event.seq === 90)), 90, detail)
   assert.equal(unavailable.tools.length, 0)
   assert.ok(unavailable.incomplete_reasons.includes('original_result_not_observed'))
-  assert.deepEqual(unavailable.records[0].source_event_seqs, [40])
+  assert.deepEqual(unavailable.records[0].source_event_seqs, [40, 89])
+  assert.equal(replacement.records[0].preview, undefined)
+  assert.equal(replacement.records.find(record => record.seq === 40).surface_op, 'append')
+  assert.ok(!JSON.stringify(replacement).includes('PRUNED'))
+  for (const view of [compact, detail]) {
+    const listed = projectActivity(model, activity(90), options(view, { coverageComplete: true, pageSourceSeqs: [90] }))
+    assert.equal(listed.activity_id, 'event:90')
+    assert.equal(listed.read_scope, 'activity')
+    assert.equal(listed.records[0].read_seq, 90)
+    assert.equal(listed.records[0].original_result_seq, 40)
+    assert.equal(listed.tools.length, 1)
+    assert.equal(listed.tools[0].result_seq, 40)
+    assert.equal(listed.tools[0].children, undefined)
+    assert.deepEqual(listed.source_seqs, [20, 21, 40, 90])
+    assert.deepEqual(listed.page_source_seqs, [90])
+    assert.equal(listed.complete, true)
+    assert.ok(!JSON.stringify(listed).includes('PRUNED'))
+  }
+  const twice = projectTarget(model, 92, detail)
+  assert.equal(twice.tools[0].result_seq, 40)
+  assert.equal(twice.records[0].original_result_seq, 40)
+  assert.deepEqual(twice.source_seqs, [20, 21, 40, 90, 92])
+  const limited = projectTarget(model, 92, { ...detail, budget: { ...detail.budget, maxDepth: 1 } })
+  assert.equal(limited.tools.length, 0)
+  assert.equal(limited.complete, false)
+  assert.deepEqual(limited.source_seqs, [90, 92])
+  assert.equal(model.originalResultByReplacement.has(102), false)
   const summary = projectTarget(model, 102, detail)
   assert.equal(summary.tools.length, 0)
   assert.equal(summary.activity_locator.activity_id, 'compaction:compact')
@@ -101,7 +149,7 @@ test('lifecycle IDs, workflow member seq, failed compaction without summary and 
   assert.equal(failed.records.find(record => record.seq === 105).error_observed, true)
   assert.deepEqual(failed.source_seqs, [104, 105])
   assert.equal(failed.complete, true)
-  const partialWorkflow = associateEvents(history.filter(event => [120, 121, 124].includes(event.seq)))
+  const partialWorkflow = associate(history.filter(event => [120, 121, 124].includes(event.seq)))
   const memberGap = projectActivity(partialWorkflow, partialWorkflow.activityBySeq.get(120), options(detail, { coverageComplete: true }))
   assert.equal(memberGap.complete, false)
   assert.ok(memberGap.incomplete_reasons.includes('workflow_member_pair_not_observed'))
@@ -123,16 +171,11 @@ test('lifecycle IDs, workflow member seq, failed compaction without summary and 
   assert.equal(unknown.records[0].preview.important, 'unknown accepted data')
   assert.equal(Object.keys(EVENT_PROJECTION_STRATEGIES).length, 59)
   for (const event of history) assert.ok(model.activityBySeq.has(event.seq))
-  const missingIds = associateEvents([
-    { seq: 1, type: 'tool/call', data: { name: 'read' } },
-    { seq: 2, type: 'tool/result', data: { message: { content: [] } } },
-  ])
-  assert.notEqual(missingIds.activityBySeq.get(1), missingIds.activityBySeq.get(2))
 })
 
 test('bounded previews never serialize original huge objects and final UTF-8 budget preserves errors and seqs', () => {
   const huge = { x: '😀'.repeat(1000000), toJSON() { throw new Error('original must not be stringified') } }
-  const local = associateEvents([{ seq: 1, type: 'extension/accepted', data: huge }])
+  const local = associate([{ seq: 1, type: 'extension/accepted', data: huge }])
   const tiny = projectTarget(local, 1, { ...compact, budget: { ...compact.budget, maxStringChars: 2, outputBytes: 1000 } })
   assert.equal(tiny.records[0].preview.x, '😀😀')
   assert.equal(tiny.truncated, true)
@@ -148,6 +191,56 @@ test('bounded previews never serialize original huge objects and final UTF-8 bud
   assert.deepEqual(trimmed.tools[0].source_seqs, [25, 27])
   assert.equal(trimmed.complete, true)
   assert.throws(() => projectTarget(model, 27, { ...detail, budget: { ...detail.budget, outputBytes: 1 } }), /metadata exceeds/)
+  const displayBudget = { ...detail.budget, maxItems: 4, maxNodes: 4, maxStringChars: 2 }
+  for (const type of ['assistant/message', 'developer/message', 'user/message']) {
+    const guarded = guardedBlocks(Array.from({ length: 100 }, (_, i) => type === 'assistant/message'
+      ? { type: 'tool-call', id: 'opaque-call-' + i, name: 'read', arguments: 'recorded' }
+      : type === 'developer/message' ? { type: 'tool-addition', toolName: 'registered-tool-' + i }
+        : { type: 'text', text: 'message block ' + i }), 4)
+    const message = { id: 'message-identity', role: type.split('/')[0], source: { kind: type === 'assistant/message' ? 'model' : type === 'developer/message' ? 'tool-registry' : 'user' }, content: guarded.content }
+    if (type === 'assistant/message') Object.assign(message.source, { provider: 'test', model: 'fixture' })
+    const record = { seq: 1, type, surfaceOp: 'append', data: type === 'user/message' ? message : { message, ...(type === 'developer/message' ? { headerSeq: 0 } : {}) } }
+    const localModel = associateEvents([record], displayBudget)
+    const projected = projectActivity(localModel, localModel.activityBySeq.get(1), { view: 'detail', budget: displayBudget, evidence: { coverageComplete: true } })
+    assert.equal(projected.truncated, true)
+    assert.equal(projected.records[0].read_seq, 1)
+    assert.equal(projected.records[0].message_id, 'message-identity')
+    assert.equal(projected.records[0].role, type.split('/')[0])
+    assert.ok(guarded.visits <= 12)
+    if (type === 'assistant/message') {
+      assert.equal(localModel.tools.size, 4)
+      assert.equal(projected.records[0].tool_calls[0].call_id, 'opaque-call-0')
+      assert.equal(projected.tools[0].call_id, 'opaque-call-0')
+      assert.equal(projected.complete, false)
+      assert.ok(projected.incomplete_reasons.includes('tool_blocks_not_fully_associated'))
+    }
+    if (type === 'developer/message') {
+      assert.equal(projected.records[0].tool_changes.length, 4)
+      assert.equal(projected.records[0].tool_changes[0].toolName, 'registered-tool-0')
+    }
+  }
+  const clippedModel = associate(history)
+  const clippedStep = clippedModel.activityBySeq.get(20)
+  const rootTool = clippedModel.tools.get('root')
+  rootTool.children = guardedBlocks(rootTool.children, 1).content
+  clippedModel.tools.get('a').children = guardedBlocks(clippedModel.tools.get('a').children, 0).content
+  const nodeLimited = projectActivity(clippedModel, clippedStep, { ...detail, budget: { ...detail.budget, maxNodes: 2 }, evidence: { coverageComplete: true } })
+  assert.equal(nodeLimited.tools.length, 1)
+  assert.deepEqual(nodeLimited.tools[0].children.map(tool => tool.call_id), ['a'])
+  assert.equal(nodeLimited.truncated, true)
+  assert.equal(nodeLimited.complete, false)
+  assert.ok(nodeLimited.incomplete_reasons.includes('execution_not_observed'))
+  const hiddenFailure = nodeLimited.records.find(record => record.seq === 27)
+  assert.equal(hiddenFailure.error_code, 'FS_NOT_FOUND')
+  assert.equal(hiddenFailure.error_seq, 27)
+  assert.equal(hiddenFailure.read_seq, 27)
+  const depthModel = associate(history)
+  depthModel.tools.get('root').children = guardedBlocks(depthModel.tools.get('root').children, 0).content
+  const depthLimited = projectActivity(depthModel, depthModel.activityBySeq.get(20), { ...detail, budget: { ...detail.budget, maxDepth: 0 }, evidence: { coverageComplete: true } })
+  assert.equal(depthLimited.tools[0].children, undefined)
+  assert.equal(depthLimited.truncated, true)
+  assert.equal(depthLimited.records.find(record => record.seq === 27).error_observed, true)
+  assert.deepEqual(depthLimited.source_seqs, nodeLimited.source_seqs)
   const readGap = projectActivity(model, activity(10), detail)
   assert.ok(readGap.incomplete_reasons.includes('activity_coverage_unproven'))
   assert.equal(readGap.complete, false)
