@@ -16,21 +16,49 @@ Search covers the existing extractor rules: user/assistant messages, ordinary to
 
 `session_list` and `session_search` return compact `session_id` and display-hint `title` (`cwd` only under `all`); listing returns `items`, `has_more`, `next_cursor`. Cold results may use the optional `sessionProjectionCache` service's lifecycle/version-checked current or predecessor title checkpoint without log reads or durable writes. Only cache-backed titles include `title_cached: true`; these hints can lag the latest rename. Explicit cached null is a hit displayed as `(untitled)`, not a reason to read the log. Without the service or a usable title, only unresolved IDs use the existing batched `readTitleSnapshots`; those results omit `title_cached`. Live records or cheaply available live Sessions also use that exact query read rather than stale checkpoints. Cache read failures propagate, not silently fall back. Headers, IDs, cwd, snippets, and authorization still come from query records/search hits, never the cache; the complete QueryEngine title API is unchanged.
 
-`session_event_list` starts at seq 0 if `after_seq` is omitted, retains structural events, and returns an empty page with `has_more: false`, `next_after_seq: null` at EOF. Optional `event_types` filters explicitly; `view: "metadata"` returns only seq/type. Default compact returns seq/type plus Unicode-code-point `preview` and `text_truncated` where semantic text exists. If a preview cannot fit the output budget, the item explicitly says `preview_omitted: true` and `text_truncated: true`; structural events without semantic text still remain. `pageEvents` 在同一次公开分页调用中提供当前页的 metadata 和所需语义 text，并传播 cancellation signal；`has_more` 只表示仍有匹配类型的事件。 Continue at `next_after_seq` while `has_more`.
+## 事件读取
 
-`session_event_read` normally returns `{format:"event-json",event,has_more:false,next_offset:null}`: a directly readable raw event object. Oversized events return `{format:"json-unicode-code-points",json_fragment,offset_chars,total_chars,has_more,next_offset}`. The offsets count Unicode **code points** (never split a surrogate pair), not bytes or UTF-16 code units. Read subsequent fragments with `offset_chars: next_offset`, join `json_fragment` strings in order, then `JSON.parse` the joined string; one fragment is not necessarily valid JSON. Both trace tools call the public service and return complete structured relationships; over-budget traces fail explicitly rather than silently truncate links. Project `session_trace` stops ancestry at the first hidden parent and marks `scope_limited` when any ancestry/descendants are hidden.
+`session_event_list` 默认 Compact，返回 `activities`、`captured_through_seq`、`has_more` 与 `next_after_seq`；显式 `view: "metadata"` 返回 `items` 中的精确 seq/type。省略 `after_seq` 从 0 开始，EOF 是空页、false 与 null。`limit` 计数本页原始事件，不计合并后的活动数。`event_types` 只筛选分页锚点，不过滤解释锚点时补读的调用、结果、阶段边界等类型。仅确认 cut 内还有匹配事件时才返回最后页内 seq 作为 `next_after_seq`；补读不推进 cursor，同一活动可以跨页重复。
 
-Config (Schemastery defaults): `pageSize: 30`, `maxPageSize: 100`, `previewChars: 240`, `outputBytes: 24576`, `searchTimeoutMs: 30000`, `eventReadCacheEntries: 8`, `eventReadCacheBytes: 67108864`. Each successful response is a native structured JSON object (`output.render` mirrors its JSON to the model). All paged tools expose `has_more`; `next_cursor` applies to indexed searches and session listing, `next_offset` to large event fragments, `next_after_seq` to event listing. Null continuation means EOF. Output budgets count the complete UTF-8 JSON including metadata, enforce a minimum of 1024 bytes, and preserve continuation positions. If a complete indexed search page exceeds `outputBytes`, the tool returns an explicit error and no partial page/cursor; lower `limit` and start a new search without a cursor, or increase configured `outputBytes`. A provider cursor may bind `limit`, so do not reuse an old cursor after lowering it. A single non-search result that cannot fit fails rather than looping forever. `pageSize` cannot exceed `maxPageSize`. Search timeouts and caller cancellation propagate through the public provider call.
+活动包含 `activity_id`、`records`、`tools`、`source_seqs` 和 `page_source_seqs`。`source_seqs` 列出实际使用的证据，`page_source_seqs` 仅列本页消费的原事件。`complete` 按请求范围及覆盖证据判断，`incomplete_reasons` 描述未读齐的关系；`truncated` 独立表示展示裁剪。已知错误存在、错误 seq 和调用身份不因省略正文而丢失。未观察到结果不能解释为仍在运行或日志中不存在。
 
-## 分页与事件快照（0.1.3）
+`session_event_read` 默认 `view: "detail", read_scope: "target"`，返回目标记录或该次工具调用自己的参数与结果，以及已取得的可靠 `activity_locator`。它不展开父、兄弟、子调用；显式 `read_scope: "activity"` 才有界展开所属活动。`view: "compact"` 只改变同一关联结构的展示密度，不扩大读取范围。原字段预览不依赖搜索 text，PTC 的子错误可读但未必可搜索。工具默认展示原 append 执行结果；单目标 replacement 沿明确引用有界读取原结果，摘要 checkpoint 不冒充工具结果。
 
-本版本要求提供公开 `pageSessions`、`pageEvents` 的 `@deepseek-ai/dsh-session-query 0.1.7-rc.2-fork2` 或兼容 engine；未提供这两个方法时插件在加载时明确报错。其他 DSH peers 保持 0.1.7-rc.2。普通 rc.2 query 不具备这些 API。
+List 和 Read 的一次主读与补读都持有同一个 `SessionObservation`，使用 `projectionMode: "none"` 和固定 cut，finally 释放 lease。响应的 `captured_through_seq` 是本次可见末尾；查询期间追加的记录留到后续请求。读取只借用有界 `readEvents` 批次，不访问 `.events` 全量物化。稀疏类型筛选可以扫描多个事件引用批次以确认 continuation，批间让出执行；取消与 timeout 明确失败，不能返回假 EOF。历史冷会话首次准备仍可能由 provider 读取完整日志，本插件的补读界限不能保证该底层准备成本很低。
 
-`session_list` 使用 provider 的不可变 metadata snapshot cursor，移除 `offset`／`next_offset`。创建、追加或删除 session 不会让 continuation 按活动列表漂移；snapshot 内已删除记录仍可出现，标题来源已删除时，工具保留 NOT_FOUND 错误并明确提示不带 cursor 重新开始 listing，不以 `(untitled)` 掩盖读取失败。续页保持 scope 和 limit 一致；snapshot 超时、被淘汰或 provider 重载时 cursor 会失效，需要重新开始。整页标题、cached 标志和 cursor 一并计入 outputBytes；整页超预算时报错且不返回部分页，降低 limit 后不带 cursor 重新开始。`session_event_list` 同样保持 provider 页的全部 items，预算不足时可显式省略全部 text preview；metadata 仍不能容纳时降低 limit，从相同 after_seq 重试。
+### Raw 与 Unicode 续读
 
-`session_trace` 先过滤可见 target、ancestors、descendants 与 all scope 下的完整 root，再对去重后的 session 调用与 list/search 相同的 titles helper。隐藏父节点之后的祖先和隐藏子树不会请求标题；cache hint 保留 `title_cached: true`。
+精确原事件必须显式 `view: "raw"`，Raw 精确返回 requested `seq`，包括 replacement 本身；`raw + read_scope: "activity"` 拒绝。`offset_chars` 仅 Raw 可用。小事件返回 `{format:"event-json",event,has_more:false,next_offset:null}`；大事件返回 `{format:"json-unicode-code-points",json_fragment,offset_chars,total_chars,has_more,next_offset}`。offset 按 Unicode code points，不是 bytes 或 UTF-16 code units；按 `next_offset` 继续、依次拼接片段，再 `JSON.parse`。单片不保证可解析。任何视图都不补读 spill、附件二进制或子会话正文。
 
-大事件分片缓存由插件 effect 拥有，仅保存同 provider、session ID、原始 seq 的已准备 Unicode code points。首次读取或 `offset_chars: 0` 会重新 exact read；后续分片复用固定 snapshot，每次仍检查 target 的当前项目授权和 snapshot header。replacement 是追加的其他 seq，不改变被读原始 seq；读取 replacement 需使用其新 seq。缓存采用 LRU，受条数和估算内存 bytes 双界限制（序列化 UTF-8、point 字符串和数组槽位）；任一容量为 0 可禁用，单个超容量事件不保留。淘汰后的续页会重新准备；插件 dispose/HMR 会清空缓存，进行中的旧调用不能重新填充。未显式请求分片的小事件直接返回原始 JSON，不建立 prepared cache。
+Raw 缓存仅保存同 provider/session/原 seq 的已准备 code points 与 captured cut，不持有 lease。首次读取或 `offset_chars: 0` 刷新；续片复用 snapshot，每次重新检查当前目标授权和 snapshot header。LRU 受 entries 与估算 bytes 双限额控制，任一为 0 禁用；单个超容量事件不保留，淘汰后续片重新准备。dispose/HMR 清空缓存，进行中的旧调用不得重新填充。
+
+### 配置与预算
+
+所有预算通过插件 `Config` 配置，不需要改源码。以下是可运行的初始工作值，**尚未用本机历史校准**；ADR 0001/0002 功能验收后另行通过公开 query 抽样评估，此处不访问真实历史。
+
+| 字段 | 初始值 | 控制内容 |
+|---|---:|---|
+| `pageSize / maxPageSize` | 30 / 100 | 原事件页大小；pageSize 不超过 maxPageSize |
+| `previewChars` | 240 | 搜索 snippet 与标题预览 |
+| `outputBytes` | 24576 | 最终整页包装 JSON UTF-8 bytes，最少 1024 |
+| `searchTimeoutMs` | 30000 | 搜索工具 timeout 元数据，沿用既有执行管线 |
+| `readTimeoutMs` | 30000 | List/Read 执行内与 caller signal 组合的实际 deadline |
+| `readBatchSize` | 128 | metadata/事件引用扫描批次；批间可取消 |
+| `readSupplementalEvents` | 1024 | 主锚点之外保留的补读事件数量 |
+| `readProcessingBytes` | 8388608 | 保留证据的保守处理 bytes 估算，访问受限后才构造展示 |
+| `readSeqSpan` | 4096 | 每个锚点附近与明确引用的最大 seq 距离 |
+| `projectionStringChars` | 2000 | 每个展示字符串的 Unicode code-point 上界 |
+| `projectionItems` | 32 | 展示集合与助手调用块访问上界 |
+| `projectionDepth / projectionNodes` | 8 / 512 | 展示字段、工具树深度与节点访问上界 |
+| `eventReadCacheEntries / eventReadCacheBytes` | 8 / 67108864 | Raw 已准备片段缓存条数/估算内存 bytes |
+
+补读超数量、处理或跨度预算时保留不完整证据，不据此声称 EOF；主锚点不能进入处理预算则明确失败，调用方可缩小页或显式 Raw。完整阶段要求真实首尾与中间每条原记录均已取得，并补齐必要明确引用。整页预算包含 wrapper、pagination、身份、错误和所有活动；预览可省略并标记 truncated，但最小完整页仍不 fit 就报错，不返回部分页或跳记录 cursor。List 可降低 limit 后从相同 after_seq 重试；索引搜索或 session list 降低 limit 后应不带旧 cursor 重启。
+
+## 分页快照与追踪
+
+本包要求提供公开 `pageSessions`、`pageEvents`、`observeSession` 的 `@deepseek-ai/dsh-session-query 0.1.7-rc.2-fork2` 或兼容 engine；缺失时加载明确失败。其他 DSH peers 保持 0.1.7-rc.2。`session_list` 使用不可变 metadata snapshot cursor，续页保持 scope/limit；新 session 不漂移页。snapshot 内标题来源删除时保留 NOT_FOUND 并提示不带 cursor 重启，不以默认标题掩盖失败。provider 重载、snapshot 超时或淘汰使 cursor 失效。
+
+两个 trace 工具返回公开服务提供的完整关系，预算不足报错，不截断 links。`session_trace` 在首个隐藏父节点停止 ancestry，并以 scope_limited 标记隐藏关系；先过滤可见节点再对去重后的标题使用与 List/Search 相同的 helper。cache hint 保留 title_cached:true。
 
 ## 内部历史关联与投影模型
 
@@ -43,6 +71,12 @@ Config (Schemastery defaults): `pageSize: 30`, `maxPageSize: 100`, `previewChars
 调用方显式提供 `options.budget`：`maxStringChars`（Unicode code points）、`maxItems`、`maxDepth`、`maxNodes` 和最终 JSON UTF-8 `outputBytes`。消息和 developer 工具增删块的实际访问受 maxItems／maxNodes 限制；工具树受每层 maxItems、总 maxNodes 和 maxDepth 限制，达到上限后不访问剩余节点。预览先有界访问原字段，再序列化有限结果；字段名超限的预览字段省略。最终预算不足时继续省略预览，保留身份、seq、已发现错误及其 Raw 入口；树节点省略后，记录证据仍保留已发现的错误，关联阶段已知配对缺口仍影响完整性。最小元数据仍超限则抛错。reader 仍负责约束传入的事件数、读取字节和跨度；这里没有已校准默认值，限额需完整 reader 功能完成后用本机历史校准。
 
 reader 可传入 `options.evidence.pageSourceSeqs`、`coverageComplete`、`incompleteReasons`：页内来源不会因补读而增加，Activity 未有读取覆盖证据时保持 incomplete，目标工具缺调用/结果或明确原结果引用时附缺口。`complete` 和正文裁剪的 `truncated` 独立。`coverageComplete` 必须由 reader 的固定 observation 和实际覆盖证明，不能仅因看到首尾边界或一个完整工具对就设为 true。返回值不持有 observation 或执行 I/O，现有公共工具接口在本节之外定义。
+
+### 内部有界证据读取
+
+[src/bounded-reader.ts](src/bounded-reader.ts) 的 `BoundedReader` 借用调用方拥有的单个 `SessionObservation`，只经 `readEvents` 扫描固定 cut，不访问 `.events`。`page` 用原事件数选择锚点并确认是否还有匹配类型；`completeTarget` 只补目标工具对，`completeActivities` 有界读取页内活动附近记录及明确引用。补读数量、处理 bytes、seq 跨度和扫描 batch 分别由 `ReaderBudget` 控制，限额耗尽保留缺口，取消明确报错。活动完整性需要真实生命周期首尾与中间每条记录均已取得，并检查明确引用；只有工具配对或首尾边界不能证明 Step 完整。
+
+`commitReadingPage` 对最终整页包装 JSON 执行 UTF-8 `outputBytes`，预算不足时省略已有限预览，保留身份、关系、已知错误、分页锚点；最小完整元数据仍放不下则报错，不提交部分页或 cursor。读取预算的工作值尚待功能完成后的独立本机历史校准。
 
 ## Build and handoff
 

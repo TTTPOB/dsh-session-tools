@@ -280,7 +280,7 @@ try {
  ctx.provide('workspaceRegistry', { archivedSessionIds: [] });
  ctx.provide('sessionProjections', { stateOf: () => ({ lastStepStartSeq: 3 }) });
  let calls = 0;
- ctx.provide('sessionQuery', { pageSessions: async () => { calls++; return { items: [] } }, pageEvents: async () => ({ items: [] }) });
+ ctx.provide('sessionQuery', { pageSessions: async () => { calls++; return { items: [] } }, pageEvents: async () => ({ items: [] }), observeSession: async () => { throw new Error('session_list must not observe logs') } });
  const plugin = await import(pathToFileURL(${JSON.stringify(join(f.home, 'profiles/web/node_modules/dsh-session-tools/dist/index.js'))}));
  await ctx.plugin(plugin, {});
  const result = await tools.get('session_list').execute({}, { signal: new AbortController().signal, agent: { session: { id: 'caller', header: { cwd: '/fixture' } } } });

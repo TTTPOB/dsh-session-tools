@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { apply } from '../dist/index.js'
 
-const config = { pageSize: 30, maxPageSize: 100, previewChars: 240, outputBytes: 24576, searchTimeoutMs: 30000, eventReadCacheEntries: 8, eventReadCacheBytes: 67108864 }
+const config = { pageSize: 30, maxPageSize: 100, previewChars: 240, outputBytes: 24576, searchTimeoutMs: 30000, eventReadCacheEntries: 8, eventReadCacheBytes: 67108864, readTimeoutMs: 30000, readBatchSize: 128, readSupplementalEvents: 1024, readProcessingBytes: 8388608, readSeqSpan: 4096, projectionStringChars: 2000, projectionItems: 32, projectionDepth: 8, projectionNodes: 512 }
 function setup(query, options = {}) {
   const definitions = new Map()
   let cleanup
@@ -35,6 +35,18 @@ function provider(extra = {}) {
       }
     },
     readTitleSnapshots: async ids => ids.map(sessionId => ({ sessionId, status: 'fulfilled', value: { session: rows.find(item => item.header.id === sessionId)?.header ?? header(sessionId), title: { title: 'Test title' } } })),
+    async observeSession(sessionId, options) {
+      options.signal.throwIfAborted()
+      assert.equal(options.projectionMode, 'none')
+      const raw = extra.readEvent ? await extra.readEvent({ sessionId, seq: 0 }, options.signal) : undefined
+      const events = raw ? [raw.target] : await (extra.listEvents?.() ?? [{ seq: 0, type: 'user/message', text: '你好', data: { content: [{ type: 'text', text: '你好' }] } }])
+      const cut = events.at(-1)?.seq ?? -1
+      return { header: raw?.session ?? header(sessionId), cursor: cut,
+        get events() { throw new Error('full materialization forbidden') },
+        readEvents: (from, to) => events.filter(event => event.seq >= from && event.seq < to && event.seq <= cut),
+        [Symbol.dispose]() {},
+      }
+    },
     listSessions: async () => rows,
     filterSessions: async filters => rows.filter(x => x.header.id === filters[0].values[0]),
     listEvents: async () => [], filterEvents: async () => [],
@@ -130,16 +142,16 @@ test('disabled search does not call listing or fall back, retains code', async (
 test('event list includes structural events, EOF and explicit type filters', async () => {
   const f = setup(provider({ listEvents: async () => [0, 1, 2].map(seq => ({ sessionId: 'a', seq, type: seq === 1 ? 'user/message' : 'turn/start', time: 0, surface: 'log-only' })) }))
   assert.deepEqual((await run(f, 'session_event_list', { session_id: 'a', view: 'metadata' })).items.map(x => x.seq), [0, 1, 2])
-  assert.deepEqual((await run(f, 'session_event_list', { session_id: 'a', event_types: ['user/message'] })).items.map(x => x.seq), [1])
-  assert.deepEqual((await run(f, 'session_event_list', { session_id: 'a', after_seq: 2 })).items, [])
+  assert.deepEqual((await run(f, 'session_event_list', { session_id: 'a', view: 'metadata', event_types: ['user/message'] })).items.map(x => x.seq), [1])
+  assert.deepEqual((await run(f, 'session_event_list', { session_id: 'a', view: 'metadata', after_seq: 2 })).items, [])
 })
 test('event JSON readable fragments reassemble without splitting Unicode', async () => {
   const text = '中文😀'.repeat(4000)
   const f = setup(provider({ readEvent: async () => ({ session: header('a'), target: { seq: 0, type: 'user/message', text } }) }), { outputBytes: 1024 })
   let offset = 0; const fragments = []
-  do { const part = await run(f, 'session_event_read', { session_id: 'a', seq: 0, offset_chars: offset }); assert.ok(Buffer.byteLength(JSON.stringify(part)) <= 1024); assert.equal(part.format, 'json-unicode-code-points'); fragments.push(part.json_fragment); offset = part.next_offset } while (offset !== null)
+  do { const part = await run(f, 'session_event_read', { view: 'raw', session_id: 'a', seq: 0, offset_chars: offset }); assert.ok(Buffer.byteLength(JSON.stringify(part)) <= 1024); assert.equal(part.format, 'json-unicode-code-points'); fragments.push(part.json_fragment); offset = part.next_offset } while (offset !== null)
   assert.equal(JSON.parse(fragments.join('')).text, text)
-  const small = await run(setup(provider()), 'session_event_read', { session_id: 'a', seq: 0 })
+  const small = await run(setup(provider()), 'session_event_read', { view: 'raw', session_id: 'a', seq: 0 })
   assert.equal(small.format, 'event-json'); assert.equal(small.event.text, '你好')
 })
 test('trace omits cross-project identities and event relationships remain complete', async () => {
@@ -156,8 +168,8 @@ test('event search index unavailable never falls back to semantic scan', async (
 })
 test('cross-project event target is rejected unless all selected', async () => {
   const f = setup(provider({ readEvent: async () => ({ session: header('b', '/two'), target: { seq: 0 } }) }))
-  await assert.rejects(run(f, 'session_event_read', { session_id: 'b', seq: 0 }), /outside the caller project/)
-  assert.ok((await run(f, 'session_event_read', { session_id: 'b', seq: 0, scope: 'all' })).event)
+  await assert.rejects(run(f, 'session_event_read', { view: 'raw', session_id: 'b', seq: 0 }), /outside the caller project/)
+  assert.ok((await run(f, 'session_event_read', { view: 'raw', session_id: 'b', seq: 0, scope: 'all' })).event)
 })
 test('titles batch once and compact records omit per-item metadata in project scope', async () => {
   const ids = []
@@ -271,18 +283,18 @@ test('complete list and search output budgets count cached flags', async () => {
   limitedSearch.ctx.sessionProjectionCache = f.ctx.sessionProjectionCache
   await assert.rejects(run(limitedSearch, 'session_search', { query: 'hit' }), /no partial result/)
 })
-test('filtered event previews use selected seq range and count Chinese code points', async () => {
-  const ranges = []
+test('filtered compact previews read original fields with Unicode limits, not index extraction', async () => {
   const f = setup(provider({
-    listEvents: async () => [0, 1, 2, 3, 4].map(seq => ({ sessionId: 'a', seq, type: seq % 2 ? 'user/message' : 'turn/start', time: 0, surface: 'log-only' })),
-    filterEvents: async (_, filters) => { ranges.push(filters[0]); return [1, 3].map(seq => ({ seq, text: '中文😀测试' })) },
-  }), { previewChars: 3 })
+    listEvents: async () => [0, 1, 2, 3, 4].map(seq => ({ seq, type: seq % 2 ? 'user/message' : 'turn/start', data: seq % 2 ? { content: [{ type: 'text', text: '中文😀测试更多字符终' }] } : { turn: seq } })),
+    filterEvents() { throw new Error('index text is not reading evidence') },
+  }), { projectionStringChars: 8 })
   const page = await run(f, 'session_event_list', { session_id: 'a', event_types: ['user/message'], limit: 2 })
-  assert.deepEqual(ranges[0], { kind: 'seq', from: 1, to: 3 })
-  assert.deepEqual(page.items.map(x => x.seq), [1, 3]); assert.equal(page.items[0].preview, '中文😀')
-  assert.equal(page.items[0].text_truncated, true); assert.equal(page.has_more, false)
+  assert.deepEqual(page.activities.flatMap(x => x.page_source_seqs), [1, 3])
+  assert.equal(page.activities[0].records[0].preview.content[0].text, '中文😀测试更多字')
+  assert.equal(page.activities[0].truncated, true); assert.equal(page.has_more, false)
   assert.equal(page.next_after_seq, null)
 })
+
 test('current-session search ANDs surface OR selection with the seq ceiling before provider ranking', async () => {
   let filters
   const f = setup(provider({ listEvents: async () => { throw new Error('full log read forbidden') }, searchEvents: async request => { filters = request.filters; return { session: header('self'), items: [] } } }))
@@ -323,6 +335,10 @@ test('config schema defaults and rejects invalid values', async () => {
   assert.deepEqual(Config({}), config)
   assert.throws(() => Config({ outputBytes: 128 }), /outputBytes/)
   assert.throws(() => Config({ searchTimeoutMs: 0 }), /searchTimeoutMs/)
+  for (const key of ['readTimeoutMs', 'readBatchSize', 'projectionItems', 'projectionDepth', 'projectionNodes']) assert.throws(() => Config({ [key]: 0 }), new RegExp(key))
+  assert.throws(() => Config({ readSupplementalEvents: -1 }), /readSupplementalEvents/)
+  assert.throws(() => Config({ readProcessingBytes: 0 }), /readProcessingBytes/)
+  assert.throws(() => Config({ readSeqSpan: -1 }), /readSeqSpan/)
   assert.throws(() => Config({ eventReadCacheEntries: -1 }), /eventReadCacheEntries/)
   assert.throws(() => Config({ eventReadCacheBytes: -1 }), /eventReadCacheBytes/)
   assert.throws(() => setup(provider(), { pageSize: 90, maxPageSize: 10 }), /pageSize/)
@@ -337,11 +353,18 @@ test('trace stops ancestry at hidden parent and marks omitted descendants', asyn
   assert.equal(result.ancestors.length, 0); assert.equal(result.scope_limited, true); assert.equal(result.complete, false)
   assert.equal(JSON.stringify(result).includes('foreign'), false)
 })
-test('budget omission of preview is explicit, never metadata impersonation', async () => {
-  const f = setup(provider({ listEvents: async () => [{ sessionId: 'a', seq: 0, type: 'user/message', time: 0, surface: 'current' }], filterEvents: async () => [{ seq: 0, text: '中文'.repeat(1000) }] }), { previewChars: 900, outputBytes: 1024 })
-  const result = await run(f, 'session_event_list', { session_id: 'a' })
-  assert.deepEqual(result.items[0], { seq: 0, type: 'user/message', preview_omitted: true, text_truncated: true })
+test('whole-page UTF-8 budget omits previews but preserves anchor/error facts; minimal pages reject atomically', async () => {
+  const events = [0, 1, 2].map(seq => ({ seq, type: 'hook/result', data: { exitCode: 1, stderrSummary: '中文😀'.repeat(30) } }))
+  const f = setup(provider({ listEvents: async () => events }), { projectionStringChars: 3000, outputBytes: 1024 })
+  const page = await run(f, 'session_event_list', { session_id: 'a', limit: 2 })
+  assert.ok(Buffer.byteLength(JSON.stringify(page)) <= 1024)
+  assert.equal(page.next_after_seq, 1); assert.equal(page.activities[0].records[0].error_observed, true)
+  assert.equal(page.activities[0].records[0].error_seq, 0); assert.ok(page.activities.some(activity => activity.truncated))
+  assert.deepEqual(page.activities.flatMap(activity => activity.page_source_seqs), [0, 1])
+  const many = setup(provider({ listEvents: async () => Array.from({ length: 30 }, (_, seq) => ({ seq, type: 'turn/start', data: { turn: seq } })) }), { outputBytes: 1024 })
+  await assert.rejects(run(many, 'session_event_list', { session_id: 'a', limit: 30 }), /no partial result/)
 })
+
 test('own-session cursor across a new step rejects stale provider cursor', async () => {
   let boundary = 3
   const f = setup(provider({ searchEvents: async request => {
@@ -375,43 +398,61 @@ test('trace titles batch only visible nodes, deduplicate root and preserve cache
 test('large-event continuations reuse preparation, refresh on restart and reauthorize every call', async () => {
   let reads = 0; let text = '旧😀'.repeat(3000)
   const f = setup(provider({ readEvent: async () => { reads++; return { session: header('a'), target: { seq: 0, text } } } }), { outputBytes: 1024 })
-  const first = await run(f, 'session_event_read', { session_id: 'a', seq: 0 })
+  const first = await run(f, 'session_event_read', { view: 'raw', session_id: 'a', seq: 0 })
   text = '新😀'.repeat(3000)
-  const second = await run(f, 'session_event_read', { session_id: 'a', seq: 0, offset_chars: first.next_offset })
+  const second = await run(f, 'session_event_read', { view: 'raw', session_id: 'a', seq: 0, offset_chars: first.next_offset })
   assert.equal(reads, 1); assert.ok(second.json_fragment.includes('旧'))
   f.exec.agent.session.header.cwd = '/two'
-  await assert.rejects(run(f, 'session_event_read', { session_id: 'a', seq: 0, offset_chars: first.next_offset }), /outside/)
+  await assert.rejects(run(f, 'session_event_read', { view: 'raw', session_id: 'a', seq: 0, offset_chars: first.next_offset }), /outside/)
   assert.equal(reads, 1)
   f.exec.agent.session.header.cwd = '/one'
-  const restarted = await run(f, 'session_event_read', { session_id: 'a', seq: 0, offset_chars: 0 })
+  const restarted = await run(f, 'session_event_read', { view: 'raw', session_id: 'a', seq: 0, offset_chars: 0 })
   assert.equal(reads, 2); assert.ok(restarted.json_fragment.includes('新'))
   const oldDefinition = f.definitions.get('session_event_read')
-  f.dispose()
-  await oldDefinition.execute({ session_id: 'a', seq: 0, offset_chars: first.next_offset }, f.exec)
-  assert.equal(reads, 3)
-  await oldDefinition.execute({ session_id: 'a', seq: 0, offset_chars: first.next_offset }, f.exec)
+  const observe = f.ctx.sessionQuery.observeSession
+  let release, entered
+  const blocked = new Promise(resolve => { release = resolve })
+  const started = new Promise(resolve => { entered = resolve })
+  f.ctx.sessionQuery.observeSession = async (...args) => { const lease = await observe(...args); entered(); await blocked; return lease }
+  const inFlight = oldDefinition.execute({ view: 'raw', session_id: 'a', seq: 0 }, f.exec)
+  await started
+  f.dispose(); release(); await inFlight
+  f.ctx.sessionQuery.observeSession = observe
+  await oldDefinition.execute({ view: 'raw', session_id: 'a', seq: 0, offset_chars: first.next_offset }, f.exec)
   assert.equal(reads, 4)
+  await oldDefinition.execute({ view: 'raw', session_id: 'a', seq: 0, offset_chars: first.next_offset }, f.exec)
+  assert.equal(reads, 5)
 })
 test('large-event entry and byte limits evict or disable preparation without cross-session reuse', async () => {
   for (const options of [{ eventReadCacheEntries: 1 }, { eventReadCacheBytes: 0 }, { eventReadCacheEntries: 0 }]) {
     const reads = []
     const f = setup(provider({ readEvent: async request => { reads.push(request.sessionId); return { session: header(request.sessionId), target: { seq: 0, text: request.sessionId.repeat(3000) } } } }), { outputBytes: 1024, ...options })
-    const a = await run(f, 'session_event_read', { session_id: 'a', seq: 0 })
-    await run(f, 'session_event_read', { session_id: 'self', seq: 0 })
-    const continuation = await run(f, 'session_event_read', { session_id: 'a', seq: 0, offset_chars: a.next_offset })
+    const a = await run(f, 'session_event_read', { view: 'raw', session_id: 'a', seq: 0 })
+    await run(f, 'session_event_read', { view: 'raw', session_id: 'self', seq: 0 })
+    const continuation = await run(f, 'session_event_read', { view: 'raw', session_id: 'a', seq: 0, offset_chars: a.next_offset })
     assert.deepEqual(reads, ['a', 'self', 'a']); assert.ok(continuation.json_fragment.includes('aaa'))
   }
 })
-test('event listing calls only public page API once with cancellation and metadata/text selection', async () => {
-  const calls = []
-  const f = setup(provider({ listEvents() { throw new Error('full list forbidden') }, filterEvents() { throw new Error('second log read forbidden') }, pageEvents: async (request, signal) => { calls.push({ request, signal }); return { session: header('a'), items: [{ seq: 2, type: 'user/message', ...(request.includeText ? { text: '中文😀' } : {}) }], nextAfterSeq: 2, capturedThroughSeq: 5 } } }))
-  const compact = await run(f, 'session_event_list', { session_id: 'a', after_seq: 0, event_types: ['user/message'], limit: 1 })
-  assert.equal(calls.length, 1); assert.equal(calls[0].signal, f.exec.signal)
-  assert.deepEqual(calls[0].request, { sessionId: 'a', afterSeq: 0, types: ['user/message'], limit: 1, includeText: true })
-  assert.equal(compact.items[0].preview, '中文😀'); assert.equal(compact.next_after_seq, 2)
-  await run(f, 'session_event_list', { session_id: 'a', view: 'metadata' })
-  assert.equal(calls[1].request.includeText, false)
+test('List selects and supplements through one fixed-cut lease, never pageEvents or full .events', async () => {
+  let observations = 0, releases = 0
+  const events = [0, 1, 2].map(seq => ({ seq, type: 'user/message', data: { content: [{ type: 'text', text: '中文😀' }] } }))
+  const f = setup(provider({ pageEvents() { throw new Error('second observation forbidden') }, observeSession: async (_, options) => {
+    observations++; assert.equal(options.projectionMode, 'none'); assert.ok(options.signal instanceof AbortSignal); assert.equal(options.signal.aborted, false)
+    const cut = events.length - 1
+    return { header: header('a'), cursor: cut, get events() { throw new Error('full .events forbidden') },
+      readEvents(from, to) { const result = events.slice(from, Math.min(to, cut + 1)); events.push({ seq: events.length, type: 'user/message', data: { content: [] } }); return result },
+      [Symbol.dispose]() { releases++ },
+    }
+  } }))
+  const compact = await run(f, 'session_event_list', { session_id: 'a', limit: 1 })
+  assert.equal(observations, 1); assert.equal(releases, 1); assert.equal(compact.captured_through_seq, 2)
+  assert.equal(compact.next_after_seq, 0)
+  assert.deepEqual(compact.activities[0].page_source_seqs, [0])
+  const metadata = await run(f, 'session_event_list', { session_id: 'a', view: 'metadata', after_seq: 0, event_types: ['user/message'], limit: 1 })
+  assert.deepEqual(metadata.items, [{ seq: 1, type: 'user/message' }]); assert.equal(metadata.next_after_seq, 1)
+  assert.equal(observations, 2); assert.equal(releases, 2)
 })
+
 test('session list forwards snapshot cursor and scope to one public page request', async () => {
   const calls = []
   const f = setup(provider({ listSessions() { throw new Error('full list forbidden') }, pageSessions: async (request, signal) => { calls.push({ request, signal }); return { items: [rows[0]], nextCursor: 'snapshot' } } }))
@@ -424,9 +465,10 @@ test('session list forwards snapshot cursor and scope to one public page request
 
 test('old query engine fails clearly at plugin load', () => {
   assert.throws(() => setup(provider({ pageSessions: undefined })), /requires sessionQuery/)
+  assert.throws(() => setup(provider({ observeSession: undefined })), /requires sessionQuery/)
 })
 test('event page never drops metadata records or advances a partial page', async () => {
-  const f = setup(provider({ pageEvents: async () => ({ session: header('a'), items: Array.from({ length: 100 }, (_, seq) => ({ seq, type: 'turn/start' })), nextAfterSeq: 99, capturedThroughSeq: 120 }) }), { outputBytes: 1024 })
+  const f = setup(provider({ listEvents: async () => Array.from({ length: 100 }, (_, seq) => ({ seq, type: 'turn/start', data: { turn: seq } })) }), { outputBytes: 1024 })
   await assert.rejects(run(f, 'session_event_list', { session_id: 'a', view: 'metadata', limit: 100 }), /lower limit.*same after_seq.*no partial result/)
 })
 
@@ -435,7 +477,7 @@ test('default preparation cache reuses a one-MiB ASCII event across three pages'
   const f = setup(provider({ readEvent: async () => { reads++; return { session: header('a'), target: { seq: 0, text: 'x'.repeat(1024 * 1024) } } } }))
   let offset
   for (let page = 0; page < 3; page++) {
-    const part = await run(f, 'session_event_read', { session_id: 'a', seq: 0, ...(offset === undefined ? {} : { offset_chars: offset }) })
+    const part = await run(f, 'session_event_read', { view: 'raw', session_id: 'a', seq: 0, ...(offset === undefined ? {} : { offset_chars: offset }) })
     assert.equal(part.format, 'json-unicode-code-points'); assert.ok(part.next_offset > (offset ?? 0))
     assert.ok(Buffer.byteLength(JSON.stringify(part)) <= config.outputBytes)
     offset = part.next_offset
@@ -449,4 +491,21 @@ test('deleted snapshot title source requires restarting listing, preserving prov
   const f = setup(provider({ pageSessions: async () => ({ items: [rows[0]], nextCursor: 'snapshot' }), readTitleSnapshots: async ids => deleted ? ids.map(sessionId => ({ sessionId, status: 'rejected', reason: error })) : provider().readTitleSnapshots(ids) }))
   const first = await run(f, 'session_list', { limit: 1 }); deleted = true
   await assert.rejects(run(f, 'session_list', { limit: 1, cursor: first.next_cursor }), failure => failure === error && /Snapshot item no longer available; start a new listing without a cursor/.test(failure.message))
+})
+
+test('lifecycle endpoints without intermediate coverage stay incomplete under supplemental budgets', async () => {
+  const events = [
+    { seq: 0, type: 'step/start', data: { turn: 1, step: 1 } },
+    ...Array.from({ length: 20 }, (_, i) => ({ seq: i + 1, type: 'todo/write', data: { todos: [] } })),
+    { seq: 21, type: 'step/end', data: { turn: 1, step: 1 } },
+  ]
+  const f = setup(provider({ listEvents: async () => events }), { readSupplementalEvents: 0 })
+  const page = await run(f, 'session_event_list', { session_id: 'a', event_types: ['step/start', 'step/end'], limit: 2 })
+  assert.deepEqual(page.activities[0].page_source_seqs, [0, 21])
+  assert.equal(page.activities[0].complete, false)
+  assert.ok(page.activities[0].incomplete_reasons.includes('step_coverage_unproven'))
+  assert.equal(page.has_more, false); assert.equal(page.next_after_seq, null)
+  const target = setup(provider({ listEvents: async () => [{ seq: 0, type: 'user/message', data: { content: [{ type: 'text', text: '😀'.repeat(2000) }] } }] }), { readProcessingBytes: 1024 })
+  await assert.rejects(run(target, 'session_event_read', { session_id: 'a', seq: 0 }), /processing_bytes_exhausted/)
+  assert.equal((await run(target, 'session_event_read', { session_id: 'a', seq: 0, view: 'raw' })).event.seq, 0)
 })

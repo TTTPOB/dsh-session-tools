@@ -16,7 +16,13 @@ export const name = 'dsh-session-tools'
 /** Services required before tools are registered. */
 export const inject = ['tools', 'sessionQuery', 'sessionProjections', 'workspaceRegistry']
 /** Limits applied to native output, indexed searches and prepared event fragments. */
-export interface Config { pageSize: number; maxPageSize: number; previewChars: number; outputBytes: number; searchTimeoutMs: number; eventReadCacheEntries: number; eventReadCacheBytes: number }
+export interface Config {
+  pageSize: number; maxPageSize: number; previewChars: number; outputBytes: number
+  searchTimeoutMs: number; readTimeoutMs: number; readBatchSize: number
+  readSupplementalEvents: number; readProcessingBytes: number; readSeqSpan: number
+  projectionStringChars: number; projectionItems: number; projectionDepth: number; projectionNodes: number
+  eventReadCacheEntries: number; eventReadCacheBytes: number
+}
 /** Loader-validated defaults and numeric limits. */
 export const Config: Schema<Config> = Schema.object({
   pageSize: Schema.number().step(1).min(1).max(100).default(30),
@@ -24,6 +30,15 @@ export const Config: Schema<Config> = Schema.object({
   previewChars: Schema.number().step(1).min(0).max(4000).default(240),
   outputBytes: Schema.number().step(1).min(1024).max(1048576).default(24576),
   searchTimeoutMs: Schema.number().step(1).min(1).max(2147483647).default(30000),
+  readTimeoutMs: Schema.number().step(1).min(1).max(2147483647).default(30000),
+  readBatchSize: Schema.number().step(1).min(1).max(1024).default(128),
+  readSupplementalEvents: Schema.number().step(1).min(0).max(100000).default(1024),
+  readProcessingBytes: Schema.number().step(1).min(1024).max(1073741824).default(8388608),
+  readSeqSpan: Schema.number().step(1).min(0).max(1000000).default(4096),
+  projectionStringChars: Schema.number().step(1).min(0).max(100000).default(2000),
+  projectionItems: Schema.number().step(1).min(1).max(10000).default(32),
+  projectionDepth: Schema.number().step(1).min(1).max(64).default(8),
+  projectionNodes: Schema.number().step(1).min(1).max(100000).default(512),
   eventReadCacheEntries: Schema.number().step(1).min(0).max(1000).default(8),
   eventReadCacheBytes: Schema.number().step(1).min(0).max(1073741824).default(67108864),
 })
@@ -33,7 +48,7 @@ export const Config: Schema<Config> = Schema.object({
  */
 export function apply(ctx: Context, config: Config): void {
   const { pageSize, maxPageSize, previewChars, outputBytes, searchTimeoutMs } = config
-  if (typeof ctx.sessionQuery.pageSessions !== 'function' || typeof ctx.sessionQuery.pageEvents !== 'function') throw new Error('dsh-session-tools requires sessionQuery pageSessions/pageEvents (query 0.1.7-rc.2-fork2 or a compatible engine)')
+  if (typeof ctx.sessionQuery.pageSessions !== 'function' || typeof ctx.sessionQuery.pageEvents !== 'function' || typeof ctx.sessionQuery.observeSession !== 'function') throw new Error('dsh-session-tools requires sessionQuery pageSessions/pageEvents/observeSession (query 0.1.7-rc.2-fork2 or a compatible engine)')
   if (pageSize > maxPageSize) throw new RangeError('pageSize cannot exceed maxPageSize')
   const size = (n?: number) => { const value = integer(n, 'limit', pageSize, maxPageSize); if (!value) throw new RangeError('limit must be positive'); return value }
   const id = (text: string) => { if (!text.trim()) throw new Error('session_id is required'); return SessionId(text) }
@@ -170,7 +185,14 @@ export function apply(ctx: Context, config: Config): void {
       if (!bounded(result, outputBytes)) throw new Error('Indexed search page exceeds outputBytes; lower limit and start a new search without a cursor, or increase configured outputBytes; no partial result was returned')
       return result
     } }))
-    const reads = readTools(ctx, { previewChars, outputBytes, size, target, titles, eventReadCacheEntries: config.eventReadCacheEntries, eventReadCacheBytes: config.eventReadCacheBytes })
+    const reads = readTools(ctx, {
+      outputBytes, size, target, titles, readTimeoutMs: config.readTimeoutMs,
+      readerBudget: { readBatchSize: config.readBatchSize, supplementalEvents: config.readSupplementalEvents,
+        processingBytes: config.readProcessingBytes, seqSpan: config.readSeqSpan },
+      projectionBudget: { maxStringChars: config.projectionStringChars, maxItems: config.projectionItems,
+        maxDepth: config.projectionDepth, maxNodes: config.projectionNodes, outputBytes },
+      eventReadCacheEntries: config.eventReadCacheEntries, eventReadCacheBytes: config.eventReadCacheBytes,
+    })
     for (const tool of reads.tools) add(tool)
     return () => { reads.dispose(); for (const dispose of disposers.reverse()) dispose() }
   })

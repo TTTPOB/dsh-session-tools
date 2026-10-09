@@ -67,8 +67,8 @@ test('actual SQLite index honors project/all, cursor and native tool results', a
     const listThird = await execute('session_list', { limit: 1, cursor: listSecond.next_cursor })
     assert.equal(listThird.items[0].session_id, 'one'); assert.equal(listThird.has_more, false)
     const events = await execute('session_event_list', { session_id: 'one' })
-    assert.equal(events.items[0].seq, 0)
-    const raw = await execute('session_event_read', { session_id: 'one', seq: 0 })
+    assert.equal(events.activities[0].page_source_seqs[0], 0)
+    const raw = await execute('session_event_read', { view: 'raw', session_id: 'one', seq: 0 })
     assert.equal(raw.format, 'event-json')
     const trace = await execute('session_event_trace', { session_id: 'one', seq: 0 })
     assert.equal(trace.target.seq, 0)
@@ -79,20 +79,20 @@ test('actual SQLite index honors project/all, cursor and native tool results', a
     assert.equal((await execute('session_trace', { session_id: 'one' })).target.title, '真实标题')
     const largeText = '原始中文😀'.repeat(5000)
     const original = one.append('user/message', createUserMessage({ content: [{ type: 'text', text: largeText }], source: { kind: 'user' } }), { surfaceOp: 'append' })
-    const exactRead = ctx.sessionQuery.readEvent.bind(ctx.sessionQuery)
+    const exactRead = ctx.sessionQuery.observeSession.bind(ctx.sessionQuery)
     let rawReads = 0
-    ctx.sessionQuery.readEvent = async (...args) => { rawReads++; return exactRead(...args) }
-    const beginning = await execute('session_event_read', { session_id: 'one', seq: original.seq })
+    ctx.sessionQuery.observeSession = async (...args) => { rawReads++; return exactRead(...args) }
+    const beginning = await execute('session_event_read', { view: 'raw', session_id: 'one', seq: original.seq })
     const replacement = one.append('user/message', createUserMessage({ content: [{ type: 'text', text: '替换后' }], source: { kind: 'user' } }), { surfaceOp: { op: 'replace', startSeq: original.seq, endSeq: original.seq }, sourceEventSeqs: [original.seq] })
     const parts = [beginning.json_fragment]; let offset = beginning.next_offset
     while (offset !== null) {
-      const part = await execute('session_event_read', { session_id: 'one', seq: original.seq, offset_chars: offset })
+      const part = await execute('session_event_read', { view: 'raw', session_id: 'one', seq: original.seq, offset_chars: offset })
       parts.push(part.json_fragment); offset = part.next_offset
     }
     assert.equal(rawReads, 1)
     assert.equal(JSON.parse(parts.join('')).data.content[0].text, largeText)
-    assert.equal((await execute('session_event_read', { session_id: 'one', seq: replacement.seq })).event.data.content[0].text, '替换后')
-    ctx.sessionQuery.readEvent = exactRead
+    assert.equal((await execute('session_event_read', { view: 'raw', session_id: 'one', seq: replacement.seq })).event.data.content[0].text, '替换后')
+    ctx.sessionQuery.observeSession = exactRead
     // Use multiple requested hits so the old internal paging loop would fail.
     for (const id of ['three', 'four']) {
       const session = ctx.sessions.create(SessionId(id), { meta: { createdAt: 5, cwd: '/one' } })
