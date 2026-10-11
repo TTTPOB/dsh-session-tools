@@ -1,7 +1,7 @@
 # ADR 0004：通用 Surface 地图与同源计量
 
 - 状态：Accepted（已采纳）
-- 实施情况：未实现。
+- 实施情况：已实现，源码及本地包功能验收通过。
 
 ## 背景
 
@@ -17,7 +17,7 @@ session-tools 提供只读地图，供模型浏览上下文，也供树外 ACP�
 
 地图描述连续 Surface 区段、节点、来源、短预览、回读入口、逐节点估价和同计量依据的占比。ACP 消费地图库，负责保护规则、可压建议、压缩准入和收益核算，见[提交 ADR](../../../dsh-active-context/docs/adr/0001-active-compaction-submission.md)及[提醒 ADR](../../../dsh-active-context/docs/adr/0002-pressure-notices.md)。通用地图独立于这些压缩政策。
 
-`getContextMap` 负责调用方 scope 授权与 Query 采样；纯函数 `buildContextMap` 只构造地图，授权和同次采样由调用方保证。通过自有 Query fork 的同步采样入口，沿现有 store-definition 路径取得 live/prepared Session。节点、预览和现有 token-meter 的计量在同一同步过程取得，返回独立 DTO 后释放租约，见 [Query 提案](../../../deepseek-harness/.agents/notes/proposed/architecture/2026-10-10-session-query-synchronous-capture.zh.md)。
+`getContextMap` 负责调用方 scope 授权与 Query 采样；纯函数 `buildContextMap` 只构造地图，授权和同次采样由调用方保证。通过自有 Query fork 的同步采样入口，沿现有 store-definition 路径取得 live/prepared Session。节点、预览和现有 token-meter 的计量在同一同步过程取得，返回独立 DTO 后释放租约，见 [Query 同步采样决策](../../../deepseek-harness/.agents/notes/implemented/architecture/2026-10-10-session-query-synchronous-capture.zh.md)。
 
 ### 工具输入与查询方式
 
@@ -90,7 +90,7 @@ Query 复用同模式、同源版本且仍有效的 prepared 对象；模式切�
 | 完整 JSON 输出上限 | 24 KiB（24576 UTF-8 bytes） |
 | 概览最多连续区段数 | 12 |
 
-样本从创建至少 10 分钟的历史记录中分散选择，Surface 为 27–148 个节点。默认 20 节点概览的完整 JSON 为 15811–16482 UTF-8 bytes（约 15.4–16.1 KiB），均低于 24 KiB；预览包含中文/非 ASCII 内容，所取窗口未含真实图片或文件。附件行为由专项 fixture 覆盖，完整验收另行确认。
+样本从创建至少 10 分钟的历史记录中分散选择，Surface 为 27–148 个节点。默认 20 节点概览的完整 JSON 为 15811–16482 UTF-8 bytes（约 15.4–16.1 KiB），均低于 24 KiB；预览包含中文/非 ASCII 内容，所取窗口未含真实图片或文件。附件行为由专项 fixture 覆盖，本机历史粗测未验证真实附件窗口的输出体量。
 
 这些结果支持保留当前限额，不证明其最优，也不保证最大 100 节点窗口或任意内容都能装入 24 KiB。超输出限额明确报错，调用方可缩小展示范围或缩短配置预览。本次粗测记录的是输出体量及含 cold 准备的读取耗时，未测量实际模型 usage、付费成本、缓存效果或任务收益。
 
@@ -102,6 +102,10 @@ Query 复用同模式、同源版本且仍有效的 prepared 对象；模式切�
 4. 地图可独立使用，ACP 通过共享库消费地图；标准地图结果保持相同职责，压缩入口重验目标。
 5. 打包后公开库子入口、peer 类型和实际 Loader 组合可用，工具注册唯一。
 
+## 已验证范围
+
+全插件回归 58 项通过；新增地图严格类型检查、全插件声明生成及 NodeNext 公开子入口消费通过。本地打包解包后，9 项地图测试和真实 Loader/SQLite 组合通过，覆盖 scope、Config、工具注册及缺少 `captureSession` 的旧 Query fork3 加载拒绝。包验证使用工作区源码路径解析 peers，不代表正式 peer 安装。复跑入口与交付条件见 [README](<../../README.md>)；地图输出预算的本机粗测见[预算记录](<../map-budgets.md>)。
+
 ## 实现依据
 
-Query 源解析和租约见 [observation.ts](../../../deepseek-harness/packages/session-query/session-query/src/observation.ts#L152-L268)；同步计量与结果复制见 [token-meter](../../../deepseek-harness/packages/llm/token-meter/src/index.ts#L146-L190)，原事件折叠见 [meter fold](../../../deepseek-harness/packages/llm/token-meter/src/surface-fold.ts#L107-L127)。现有输出配置见 [session-tools 配置](../../src/index.ts#L27-L31)，作用域、预览和结果字节限制复用 [shared helpers](../../src/shared.ts#L15-L42)。
+Query 源解析和租约见 [observation.ts](../../../deepseek-harness/packages/session-query/session-query/src/observation.ts#L156-L291)；同步计量与结果复制见 [token-meter](../../../deepseek-harness/packages/llm/token-meter/src/index.ts#L146-L190)，原事件折叠见 [meter fold](../../../deepseek-harness/packages/llm/token-meter/src/surface-fold.ts#L107-L127)。现有输出配置见 [session-tools 配置](../../src/index.ts#L27-L31)，作用域、预览和结果字节限制复用 [shared helpers](../../src/shared.ts#L15-L42)。
