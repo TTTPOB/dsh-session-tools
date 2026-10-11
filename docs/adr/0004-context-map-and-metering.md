@@ -37,7 +37,7 @@ session-tools 提供只读地图，供模型浏览上下文，也供树外 ACP�
 
 - `snapshot_ref`：session_id、采样标识及源读取上界；replacement/content generation 可作为诊断信息。
 - `window`：Surface 起止位置、returned/total 节点数和首尾 locator；overview 另报区段数。
-- `node`：surface_index、seq、event_type、read_seq、role/source/form、preview、导航及计量。未知信息标 unknown；空/dormant 节点保留位置，可无消息且价格为零。
+- `node`：surface_index、seq、event_type、read_seq、role/source/form、preview、导航及计量。未知信息标 unknown；空/dormant 节点保留位置，可无消息且估计 token 数为零。
 - `preview_basis`、`preview_truncated`：说明预览来自原事件还是 Session 消息解释，以及是否截断。
 - `metering.available/basis/reason`：说明计量是否可用、计量依据及缺失原因。
 - `segments/windows`：连续 span、首尾 anchor、节点数、estimated_tokens、share_of_surface 和 locator。
@@ -53,7 +53,7 @@ session-tools 提供只读地图，供模型浏览上下文，也供树外 ACP�
 
 `surfaceTokens` 为节点估价之和，区段估价同样求和，`share_of_surface` 使用该总数。`totalTokens = max(0, baseline.tokens + surfaceDeltaTokens)`；配置与最近成功请求一致且 API usage 满足既有覆盖条件时使用 usage baseline，否则 estimated。schemas 由原 meter 计入。
 
-预览来自 Session 当前消息解释；meter 对同一 Session 日志独立折叠原事件，并应用其 image/offload 与附件路由定价。二者分别标明 basis：节点按 seq 对齐，但预览文字与定价文本可能不同，插件消息改写和最终 provider wire 转换也可能影响实际用量。
+预览来自 Session 当前消息解释；meter 对同一 Session 日志独立折叠原事件，并应用其 image/offload 与附件路由计量。二者分别标明 basis：节点按 seq 对齐，但预览文字与计量所依据的文本可能不同，插件消息改写和最终 provider wire 转换也可能影响实际用量。
 
 容量占比仅在同采样 requestContext 与 header 的 provider/model 匹配、contextWindow 有效时提供，否则 unknown。无 meter 时仍返回节点和已知汇总。
 
@@ -68,7 +68,7 @@ Query 复用同模式、同源版本且仍有效的 prepared 对象；模式切�
 ## 理由与替代方案
 
 - **ACP 专用地图**将通用阅读与压缩政策绑定；共享地图库能同时服务独立浏览和 ACP 提醒。
-- **UI 汇总作为节点价格**缺少区段定位，计量依据也不同；采用 meter 的逐节点 measurement，汇总保留自身语义。
+- **UI 汇总作为节点计量值**缺少区段定位，计量依据也不同；采用 meter 的逐节点 measurement，汇总保留自身语义。
 - **另写 tokenizer 或 Surface fold**增加估价与消息投影的维护成本；复用现有实现并标明依据。
 - **固定旧地图分页**支持稳定遍历，但需要缓存和过期管理；当前用途是定位现有上下文，按需查询当前窗口即可。
 
@@ -94,7 +94,7 @@ Query 复用同模式、同源版本且仍有效的 prepared 对象；模式切�
 
 ## 验收要点
 
-1. 节点与价格按 Surface 顺序对齐，覆盖高 seq checkpoint、空节点、长 Turn、cold 修复记录和图片；Turn/Step 导航符合实际边界。
+1. 节点与计量值按 Surface 顺序对齐，覆盖高 seq checkpoint、空节点、长 Turn、cold 修复记录和图片；Turn/Step 导航符合实际边界。
 2. 历史读取保持只读，不激活 Agent；返回 DTO 不受后续追加/replacement 影响；后续窗口读取当前状态，失效 anchor 明确报错。
 3. 预览和计量依据正确；无 meter、容量未知或路由不匹配时明确缺失信息；scope 与完整输出预算有效。
 4. 地图可独立使用，ACP 通过共享库消费地图；标准地图结果保持相同职责，压缩入口重验目标。
