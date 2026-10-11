@@ -61,6 +61,22 @@ test('read-only preflight imports through Host peers absent from profile direct 
   } finally { rmSync(f.root, { recursive: true, force: true }) }
 })
 
+test('read-only preflight resolves import-only exports through the Host loader', () => {
+  const f = fixture()
+  try {
+    const manifest = join(f.plugin, 'package.json')
+    const data = JSON.parse(readFileSync(manifest, 'utf8'))
+    data.exports = { '.': { import: './dist/index.js' } }
+    put(manifest, JSON.stringify(data))
+    const web = join(f.home, 'profiles/web/package.json')
+    const before = readFileSync(web, 'utf8')
+    const result = run(f, undefined, true)
+    assert.equal(result.status, 0, result.stderr)
+    assert.equal(readFileSync(web, 'utf8'), before)
+    assert.equal(existsSync(join(f.home, 'backups')), false)
+  } finally { rmSync(f.root, { recursive: true, force: true }) }
+})
+
 test('activation succeeds only after profile preflight', () => {
   const f = fixture()
   try {
@@ -280,7 +296,7 @@ try {
  ctx.provide('workspaceRegistry', { archivedSessionIds: [] });
  ctx.provide('sessionProjections', { stateOf: () => ({ lastStepStartSeq: 3 }) });
  let calls = 0;
- ctx.provide('sessionQuery', { pageSessions: async () => { calls++; return { items: [] } }, pageEvents: async () => ({ items: [] }), observeSession: async () => { throw new Error('session_list must not observe logs') } });
+ ctx.provide('sessionQuery', { pageSessions: async () => { calls++; return { items: [] } }, pageEvents: async () => ({ items: [] }), observeSession: async () => { throw new Error('session_list must not observe logs') }, captureSession: async () => { throw new Error('session_list must not capture logs') } });
  const plugin = await import(pathToFileURL(${JSON.stringify(join(f.home, 'profiles/web/node_modules/dsh-session-tools/dist/index.js'))}));
  await ctx.plugin(plugin, {});
  const result = await tools.get('session_list').execute({}, { signal: new AbortController().signal, agent: { session: { id: 'caller', header: { cwd: '/fixture' } } } });

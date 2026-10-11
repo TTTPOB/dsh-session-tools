@@ -2,7 +2,7 @@
 // Activate a preinstalled shared plugin without starting the Host.
 import { existsSync, lstatSync, readFileSync, realpathSync, writeFileSync, copyFileSync, mkdirSync, renameSync } from 'node:fs'
 import { createRequire } from 'node:module'
-import { pathToFileURL } from 'node:url'
+import { pathToFileURL, fileURLToPath } from 'node:url'
 import { resolve, join, dirname, isAbsolute } from 'node:path'
 
 const args = process.argv.slice(2)
@@ -38,6 +38,9 @@ try {
   // Use the public boot package's profile resolver, not Node's unmodified package lookup.
   const { loadProfileDirectory, createRuntimeResolution, PluginPackages } = await import(pathToFileURL(hostReq.resolve('@deepseek-ai/dsh-app-boot')).href)
   const { Context } = await import(pathToFileURL(hostReq.resolve('@deepseek-ai/cordis')).href)
+  const { ModuleLoader } = await import(pathToFileURL(hostReq.resolve('@deepseek-ai/cordis-plugin-loader')).href)
+  const loader = ModuleLoader.fromInternal()
+  if (!loader) fail('Installed Host module resolver is unavailable')
   const data = manifests.map(path => ({ path, json: parse(path) }))
   const web = data.find(item => item.path === webManifest).json
   const oldPatch = checkOnly && !existsSync(patch) ? '' : read(patch)
@@ -57,23 +60,32 @@ try {
     } else {
       if (!requested?.startsWith('file:') || realpathSync(resolve(profile, requested.slice(5))) !== tarballPath) fail(`${profile}: plugin dependency specifies a different test tarball`)
     }
-    const req = createRequire(path)
-    for (const name of [plugin, ...(checkOnly ? [] : shared)]) {
+    const names = [plugin, ...(checkOnly ? [] : shared)]
+    for (const name of names) {
       if (!deps[name]) fail(`${profile}: missing explicit dependency ${name}; reconcile shared dependencies first`)
-      try { req.resolve(name) } catch { fail(`${profile}: cannot resolve built entry of ${name}`) }
     }
-    let entry, pluginManifest
+    let pluginManifest
     try {
-      entry = realpathSync(req.resolve(plugin))
       pluginManifest = parse(join(profile, 'node_modules', plugin, 'package.json'))
     } catch { fail(`${profile}: cannot locate built plugin entry and manifest`) }
     if (pluginManifest.name !== plugin || pluginManifest.version !== version) fail(`${profile}: installed plugin identity differs from ${plugin}@${version} (actual ${pluginManifest.name}@${pluginManifest.version})`)
-    if (!/\.(?:mjs|cjs|js)$/.test(entry)) fail(`${profile}: plugin entry is not built JavaScript`)
     const loadedProfile = loadProfileDirectory('dsh-session-tools preflight', profile, hostAnchor)
     const resolution = await createRuntimeResolution({ installAnchor: hostAnchor, profile: loadedProfile, home: root })
     const ctx = new Context()
     try {
       await ctx.plugin(PluginPackages, { resolution })
+      const parentURL = pathToFileURL(path).href
+      let entry
+      for (const name of names) {
+        try {
+          const resolved = loader.version === 'v2'
+            ? loader.resolveSync(parentURL, { specifier: name, attributes: {} })
+            : loader.resolveSync(name, parentURL, {})
+          const built = realpathSync(fileURLToPath(resolved.url))
+          if (name === plugin) entry = built
+        } catch { fail(`${profile}: cannot resolve built entry of ${name}`) }
+      }
+      if (!/\.(?:mjs|cjs|js)$/.test(entry)) fail(`${profile}: plugin entry is not built JavaScript`)
       const entryUrl = pathToFileURL(entry).href
       const selected = ctx.pluginPackages.packageOf(plugin, pathToFileURL(path).href)
       if (selected === undefined || realpathSync(selected.dir) !== realpathSync(join(profile, 'node_modules', plugin))) {
