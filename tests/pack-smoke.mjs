@@ -18,8 +18,10 @@ const root = mkdtempSync(join(tmpdir(), 'dsh-session-tools-pack-'))
 try {
   writeFileSync(join(root, 'package.json'), JSON.stringify({ name: 'session-tools-smoke', private: true, type: 'module' }))
   const { version } = manifest
-  execFileSync('pnpm', ['pack', '--pack-destination', root], { cwd: source, stdio: 'pipe' })
-  execFileSync('pnpm', ['--config.auto-install-peers=false', 'add',
+  execFileSync('pnpm', ['--config.verify-deps-before-run=false', 'pack', '--pack-destination', root], { cwd: source, stdio: 'pipe' })
+  const archive = execFileSync('tar', ['-tzf', join(root, `dsh-session-tools-${version}.tgz`)], { encoding: 'utf8' })
+  assert.doesNotMatch(archive, /context-map/, 'package must not contain retired map implementation or declarations')
+  execFileSync('pnpm', ['--config.verify-deps-before-run=false', '--config.auto-install-peers=false', 'add',
     join(root, `dsh-session-tools-${version}.tgz`),
     '@deepseek-ai/cordis@4.0.4', '@deepseek-ai/dsh-tools@0.1.7-rc.2',
     ...forkPackages, '@deepseek-ai/dsh-workspace@0.1.7-rc.2',
@@ -27,10 +29,12 @@ try {
     ...['agent','ptc-runtime','invariants','llm','scope','system-prompt','user-approval','sandbox','sandbox-policy','session-title','tool-todo','session-persistence'].map(x => `@deepseek-ai/dsh-${x}@0.1.7-rc.2`),
   ], { cwd: root, stdio: 'pipe' })
   const hostRequire = createRequire(join(root, 'package.json'))
-  const [pluginUrl, mapUrl] = JSON.parse(execFileSync(process.execPath, ['--input-type=module', '-e',
-    'console.log(JSON.stringify(process.argv.slice(1).map(name => import.meta.resolve(name))))',
-    'dsh-session-tools', 'dsh-session-tools/context-map',
+  const { pluginUrl, mapError } = JSON.parse(execFileSync(process.execPath, ['--input-type=module', '-e',
+    `let mapError
+     try { import.meta.resolve('dsh-session-tools/context-map') } catch (error) { mapError = error.code }
+     console.log(JSON.stringify({ pluginUrl: import.meta.resolve('dsh-session-tools'), mapError }))`,
   ], { cwd: root, encoding: 'utf8' }))
+  assert.equal(mapError, 'ERR_PACKAGE_PATH_NOT_EXPORTED')
   const pluginPath = fileURLToPath(pluginUrl)
   const pluginRequire = createRequire(pluginPath)
   for (const name of ['@deepseek-ai/cordis', '@deepseek-ai/dsh-tools', '@deepseek-ai/dsh-session', '@deepseek-ai/dsh-session-query', '@deepseek-ai/dsh-session-projection', '@deepseek-ai/dsh-workspace']) {
@@ -50,7 +54,9 @@ try {
   const entry = await import(pluginPath)
   assert.equal(entry.name, 'dsh-session-tools')
   assert.equal(typeof entry.apply, 'function')
-  const map = await import(mapUrl)
-  for (const name of ['getContextMap', 'buildContextMap', 'resolveSurfaceAnchor', 'resolveSurfaceRange']) assert.equal(typeof map[name], 'function', `public map export ${name}`)
+  const installedManifest = JSON.parse(readFileSync(join(dirname(pluginPath), '..', 'package.json'), 'utf8'))
+  assert.deepEqual(Object.keys(installedManifest.exports), ['.'])
+  assert.equal(installedManifest.peerDependencies['@deepseek-ai/dsh-token-meter'], undefined)
+  assert.deepEqual(Object.keys(entry).sort(), ['Config', 'apply', 'inject', 'name'])
   console.log('Packaging-only smoke passed with explicitly installed peers; this is NOT Host-provided profile-peer validation. Run deploy/activate.test.mjs and --check-only against the consuming profile.')
 } finally { rmSync(root, { recursive: true, force: true }) }

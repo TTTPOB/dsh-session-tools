@@ -2,11 +2,11 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { apply } from '../dist/index.js'
 
-const config = { mapPageSize: 20, mapMaxPageSize: 100, mapMaxSpans: 12, pageSize: 30, maxPageSize: 100, previewChars: 240, outputBytes: 24576, searchTimeoutMs: 30000, eventReadCacheEntries: 8, eventReadCacheBytes: 67108864, readTimeoutMs: 30000, readBatchSize: 128, readSupplementalEvents: 1024, readProcessingBytes: 8388608, readSeqSpan: 4096, projectionStringChars: 2000, projectionItems: 32, projectionDepth: 8, projectionNodes: 512 }
+const config = { pageSize: 30, maxPageSize: 100, previewChars: 240, outputBytes: 24576, searchTimeoutMs: 30000, eventReadCacheEntries: 8, eventReadCacheBytes: 67108864, readTimeoutMs: 30000, readBatchSize: 128, readSupplementalEvents: 1024, readProcessingBytes: 8388608, readSeqSpan: 4096, projectionStringChars: 2000, projectionItems: 32, projectionDepth: 8, projectionNodes: 512 }
 function setup(query, options = {}) {
   const definitions = new Map()
   let cleanup
-  const ctx = { get(name) { return this[name] }, sessionQuery: query, workspaceRegistry: { archivedSessionIds: [] }, sessionProjections: { stateOf: () => ({ lastStepStartSeq: 3 }) }, tools: { register(tool) { definitions.set(tool.name, tool); return () => definitions.delete(tool.name) } }, effect(fn) { cleanup = fn() } }
+  const ctx = { get(name) { return this[name] }, sessionQuery: query, workspaceRegistry: { archivedSessionIds: [] }, sessionProjections: { stateOf: () => ({ lastStepStartSeq: 3 }) }, tools: { register(tool) { assert.equal(definitions.has(tool.name), false); definitions.set(tool.name, tool); return () => definitions.delete(tool.name) } }, effect(fn) { cleanup = fn() } }
   apply(ctx, { ...config, ...options })
   const controller = new AbortController()
   const exec = { signal: controller.signal, agent: { session: { id: 'self', header: { cwd: '/one' } } } }
@@ -16,7 +16,7 @@ const header = (id, cwd = '/one') => ({ id, cwd, createdAt: 1 })
 const rows = [header('a'), header('b', '/two'), header('self')].map(header => ({ header, live: false, persisted: true }))
 function provider(extra = {}) {
   return {
-    captureSession: async () => { throw new Error('Unexpected map capture') },
+    captureSession: async () => { throw new Error('History tools must not capture the Surface') },
     async pageSessions(request) {
       const source = await (extra.listSessions?.() ?? rows)
       const visible = source.filter(row => !request.filters?.length || row.header.cwd === request.filters[0].values[0])
@@ -58,8 +58,9 @@ function provider(extra = {}) {
   }
 }
 const run = (fixture, tool, args) => fixture.definitions.get(tool).execute(args, fixture.exec)
-test('all eight native-object tools register and dispose', () => {
-  const fixture = setup(provider()); assert.equal(fixture.definitions.size, 8)
+test('only history tools register once and dispose', () => {
+  const fixture = setup(provider())
+  assert.deepEqual([...fixture.definitions.keys()].sort(), ['session_event_list', 'session_event_read', 'session_event_search', 'session_event_trace', 'session_list', 'session_search', 'session_trace'])
   fixture.dispose(); assert.equal(fixture.definitions.size, 0)
 })
 test('project exact cwd and explicit all; missing cwd rejects project', async () => {
@@ -336,14 +337,13 @@ test('config schema defaults and rejects invalid values', async () => {
   assert.deepEqual(Config({}), config)
   assert.throws(() => Config({ outputBytes: 128 }), /outputBytes/)
   assert.throws(() => Config({ searchTimeoutMs: 0 }), /searchTimeoutMs/)
-  for (const key of ['mapPageSize', 'mapMaxPageSize', 'mapMaxSpans', 'readTimeoutMs', 'readBatchSize', 'projectionItems', 'projectionDepth', 'projectionNodes']) assert.throws(() => Config({ [key]: 0 }), new RegExp(key))
+  for (const key of ['readTimeoutMs', 'readBatchSize', 'projectionItems', 'projectionDepth', 'projectionNodes']) assert.throws(() => Config({ [key]: 0 }), new RegExp(key))
   assert.throws(() => Config({ readSupplementalEvents: -1 }), /readSupplementalEvents/)
   assert.throws(() => Config({ readProcessingBytes: 0 }), /readProcessingBytes/)
   assert.throws(() => Config({ readSeqSpan: -1 }), /readSeqSpan/)
   assert.throws(() => Config({ eventReadCacheEntries: -1 }), /eventReadCacheEntries/)
   assert.throws(() => Config({ eventReadCacheBytes: -1 }), /eventReadCacheBytes/)
   assert.throws(() => setup(provider(), { pageSize: 90, maxPageSize: 10 }), /pageSize/)
-  assert.throws(() => setup(provider(), { mapPageSize: 90, mapMaxPageSize: 10 }), /mapPageSize/)
   const oldQuery = provider(); delete oldQuery.captureSession
   assert.throws(() => setup(oldQuery), /captureSession/)
 })

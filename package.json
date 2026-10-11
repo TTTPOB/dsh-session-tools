@@ -23,14 +23,10 @@
     "@deepseek-ai/dsh-session-query": "0.1.7-rc.2-fork4",
     "@deepseek-ai/dsh-tools": "0.1.7-rc.2",
     "@deepseek-ai/dsh-workspace": "0.1.7-rc.2",
-    "@deepseek-ai/schemastery": "3.18.4",
-    "@deepseek-ai/dsh-token-meter": "0.1.7-rc.2"
+    "@deepseek-ai/schemastery": "3.18.4"
   },
   "peerDependenciesMeta": {
     "@deepseek-ai/dsh-session-projection-cache": {
-      "optional": true
-    },
-    "@deepseek-ai/dsh-token-meter": {
       "optional": true
     }
   },
@@ -51,18 +47,13 @@
     "@deepseek-ai/dsh-workspace": "0.1.7-rc.2",
     "@deepseek-ai/schemastery": "3.18.4",
     "@types/node": "^26.6.3",
-    "typescript": "^5.9.3",
-    "@deepseek-ai/dsh-token-meter": "0.1.7-rc.2"
+    "typescript": "^5.9.3"
   },
   "license": "MIT",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
-    },
-    "./context-map": {
-      "types": "./dist/context-map.d.ts",
-      "import": "./dist/context-map.js"
     }
   }
 }

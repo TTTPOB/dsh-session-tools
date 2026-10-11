@@ -25,7 +25,7 @@ test('real Cordis Loader mounts built ESM through cordis.yml then disposes tools
     ctx.provide('workspaceRegistry', { archivedSessionIds: ['archived'] })
     ctx.provide('sessionProjections', { stateOf: () => ({ lastStepStartSeq: 3 }) })
     ctx.provide('sessionQuery', {
-      captureSession: async () => { throw new Error('Unexpected map capture') },
+      captureSession: async () => { throw new Error('History tools must not capture the Surface') },
       pageSessions: async () => ({ items: [] }),
       pageEvents: async () => ({ session: {}, items: [], capturedThroughSeq: -1 }),
       observeSession: async () => { throw new Error('search must not observe logs') },
@@ -40,7 +40,7 @@ test('real Cordis Loader mounts built ESM through cordis.yml then disposes tools
     } }
     await ctx.loader.create({ name: 'cordis:include', config: { path: pathToFileURL(configPath).href } })
     await ctx.loader.await()
-    assert.equal(tools.size, 8)
+    assert.deepEqual([...tools.keys()].sort(), ['session_event_list', 'session_event_read', 'session_event_search', 'session_event_trace', 'session_list', 'session_search', 'session_trace'])
     assert.equal(typeof tools.get('session_search').execute, 'function')
     const listed = await tools.get('session_list').execute({}, { signal: new AbortController().signal, agent: { session: { id: 'caller', header: { cwd: '/one' } } } })
     assert.deepEqual(listed, { items: [], has_more: false, next_cursor: null })
@@ -85,15 +85,6 @@ test('Loader + actual SQLite executes compact/target/activity/Raw contracts and 
       assert.deepEqual(JSON.parse(result.content.find(block => block.type === 'text').text), result.value)
       return result.value
     }
-    const map = await value('session_context_map', {})
-    assert.equal(map.snapshot_ref.session_id, session.id)
-    assert.equal(map.window.total, session.surface.nodes.length)
-    assert.deepEqual(map.nodes.map(node => node.seq), session.surface.nodes)
-    assert.equal(map.metering.available, false)
-    const mapWindow = await value('session_context_map', { view: 'messages', limit: 1,
-      window: { anchor: { seq: map.nodes[0].seq, edge: 'before' }, side: 'after' } })
-    assert.equal(mapWindow.window.returned, 1)
-    assert.deepEqual(mapWindow.spans, [])
     const page = await value('session_event_list', { after_seq: 1, limit: 1 })
     const expected = JSON.parse(await readFile(new URL('./fixtures/reading-expected.json', import.meta.url), 'utf8'))
     assert.deepEqual(readingContract(page), expected)
