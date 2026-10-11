@@ -1,7 +1,6 @@
 # ADR 0002：按需读取相关记录，明确展示不完整内容
 
 - 状态：Accepted（已采纳）
-- 实施情况：已完成并验收。固定 observation、原事件分页、有界补读、完整性证据、整页预算与超时已接入 List/Read；默认值已依据本机 6 个真实历史会话做有界估计后保留，见[校准依据](<../reading-budgets.md>)。
 
 ## 背景
 
@@ -125,7 +124,7 @@
 
 ## 展示预算与精确续读
 
-补读事件数、处理字节、跨度、树深度/节点数和展示预算分别受限。默认 `readBatchSize=128`、`readSupplementalEvents=1024`、`readProcessingBytes=8388608`、`readSeqSpan=4096`；展示默认 `projectionStringChars=2000`、`projectionItems=32`、`projectionDepth=8`、`projectionNodes=512`、`outputBytes=24576`；`readTimeoutMs=30000`。这些值在功能验收后通过公开 query 对本机 6 个真实历史会话有界抽样估计后保留，具体数据及局限见[读取预算校准](<../reading-budgets.md>)。样本中阶段最多 27 条事件、工具配对最大间隔 23 seq、PTC 最多 11 个直接子节点，当前读取限额有余量；长正文和大集合则按设计裁剪，不以放大预算追求全文。30 秒是执行上限，不是已量测的冷历史性能保证。
+补读事件数、处理字节、跨度、树深度/节点数和展示预算分别受限。默认 `readBatchSize=128`、`readSupplementalEvents=1024`、`readProcessingBytes=8388608`、`readSeqSpan=4096`；展示默认 `projectionStringChars=2000`、`projectionItems=32`、`projectionDepth=8`、`projectionNodes=512`、`outputBytes=24576`；`readTimeoutMs=30000`。长正文和大集合按设计裁剪，不以放大预算追求全文。30 秒是执行上限，不是冷历史读取的性能保证。
 
 避免先完整序列化巨大对象再截短；优先保留身份、状态、错误、requested/read seq 和分页字段，按最终 JSON UTF-8 字节数执行 outputBytes。若最小完整页仍放不下则明确报错，不交付部分页或可跳记录的 cursor。
 

@@ -1,7 +1,6 @@
 # ADR 0001：历史事件共享关联与投影模型
 
 - 状态：Accepted（已采纳）
-- 实施情况：已完成并验收。共享关联、Compact/Detail 投影与 Raw 入口已接入公开读取工具；有界补读与展示裁剪的限制见 [ADR 0002](<0002-local-reading-and-completeness.md>)，默认预算依据见[读取预算校准](<../reading-budgets.md>)。
 
 ## 背景
 
