@@ -27,7 +27,11 @@ try {
     ...['agent','ptc-runtime','invariants','llm','scope','system-prompt','user-approval','sandbox','sandbox-policy','session-title','tool-todo','session-persistence'].map(x => `@deepseek-ai/dsh-${x}@0.1.7-rc.2`),
   ], { cwd: root, stdio: 'pipe' })
   const hostRequire = createRequire(join(root, 'package.json'))
-  const pluginPath = hostRequire.resolve('dsh-session-tools')
+  const [pluginUrl, mapUrl] = JSON.parse(execFileSync(process.execPath, ['--input-type=module', '-e',
+    'console.log(JSON.stringify(process.argv.slice(1).map(name => import.meta.resolve(name))))',
+    'dsh-session-tools', 'dsh-session-tools/context-map',
+  ], { cwd: root, encoding: 'utf8' }))
+  const pluginPath = fileURLToPath(pluginUrl)
   const pluginRequire = createRequire(pluginPath)
   for (const name of ['@deepseek-ai/cordis', '@deepseek-ai/dsh-tools', '@deepseek-ai/dsh-session', '@deepseek-ai/dsh-session-query', '@deepseek-ai/dsh-session-projection', '@deepseek-ai/dsh-workspace']) {
     assert.equal(realpathSync(pluginRequire.resolve(name)), realpathSync(hostRequire.resolve(name)), `shared peer ${name}`)
@@ -46,7 +50,7 @@ try {
   const entry = await import(pluginPath)
   assert.equal(entry.name, 'dsh-session-tools')
   assert.equal(typeof entry.apply, 'function')
-  const map = await import(hostRequire.resolve('dsh-session-tools/context-map'))
+  const map = await import(mapUrl)
   for (const name of ['getContextMap', 'buildContextMap', 'resolveSurfaceAnchor', 'resolveSurfaceRange']) assert.equal(typeof map[name], 'function', `public map export ${name}`)
   console.log('Packaging-only smoke passed with explicitly installed peers; this is NOT Host-provided profile-peer validation. Run deploy/activate.test.mjs and --check-only against the consuming profile.')
 } finally { rmSync(root, { recursive: true, force: true }) }
