@@ -40,7 +40,7 @@ jobs:
       - name: Validate tag and install pinned dependencies
         run: |
           test "$RELEASE_TAG" = "v$(node -p 'JSON.parse(require("fs").readFileSync("package.json")).version')"
-          pnpm install --frozen-lockfile
+          pnpm --config.verify-deps-before-run=false install --frozen-lockfile
       - name: Build and test the consumer
         run: pnpm --config.verify-deps-before-run=false check
       - name: Verify packaged entry and create asset
