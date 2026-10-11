@@ -17,7 +17,7 @@ session-tools 提供只读地图，供模型浏览上下文，也供树外 ACP�
 
 地图描述连续 Surface 区段、节点、来源、短预览、回读入口、逐节点估价和同计量依据的占比。ACP 消费地图库，负责保护规则、可压建议、压缩准入和收益核算，见[提交 ADR](../../../dsh-active-context/docs/adr/0001-active-compaction-submission.md)及[提醒 ADR](../../../dsh-active-context/docs/adr/0002-pressure-notices.md)。通用地图独立于这些压缩政策。
 
-通过自有 Query fork 的同步采样入口，沿现有 store-definition 路径取得 live/prepared Session。节点、预览和现有 token-meter 的计量在同一同步过程取得，返回独立 DTO 后释放租约，见 [Query 提案](../../../deepseek-harness/.agents/notes/proposed/architecture/2026-10-10-session-query-synchronous-capture.zh.md)。
+`getContextMap` 负责调用方 scope 授权与 Query 采样；纯函数 `buildContextMap` 只构造地图，授权和同次采样由调用方保证。通过自有 Query fork 的同步采样入口，沿现有 store-definition 路径取得 live/prepared Session。节点、预览和现有 token-meter 的计量在同一同步过程取得，返回独立 DTO 后释放租约，见 [Query 提案](../../../deepseek-harness/.agents/notes/proposed/architecture/2026-10-10-session-query-synchronous-capture.zh.md)。
 
 ### 工具输入与查询方式
 
@@ -25,7 +25,7 @@ session-tools 提供只读地图，供模型浏览上下文，也供树外 ACP�
 |---|---|
 | `session_id` | 省略时取调用会话；显式目标查询它现在的 Surface |
 | `scope` | 默认精确 caller cwd 的 project；all 须显式，仅当前 provider；授权先于采样 |
-| `view` | overview / messages；完整正文及关系交给已有 Read/Raw/Trace |
+| `view` | 默认 overview：有界概览加节点窗口；messages：仅节点窗口。完整正文及关系交给已有 Read/Raw/Trace |
 | `window`、`limit` | 按 anchor/side 定位当前节点窗口；limit 限制展示节点数 |
 | `metering` | auto / none / require；缺计量时 auto 给原因，require 明确失败 |
 
@@ -35,15 +35,15 @@ session-tools 提供只读地图，供模型浏览上下文，也供树外 ACP�
 
 ### 返回信息
 
-- `snapshot_ref`：session_id、采样标识及源读取上界；replacement/content generation 可作为诊断信息。
-- `window`：Surface 起止位置、returned/total 节点数和首尾 locator；overview 另报区段数。
-- `node`：surface_index、seq、event_type、read_seq、role/source/form、preview、导航及计量。未知信息标 unknown；空/dormant 节点保留位置，可无消息且估计 token 数为零。
-- `preview_basis`、`preview_truncated`：说明预览来自原事件还是 Session 消息解释，以及是否截断。
-- `metering.available/basis/reason`：说明计量是否可用、计量依据及缺失原因。
-- `segments/windows`：连续 span、首尾 anchor、节点数、estimated_tokens、share_of_surface 和 locator。
-- `context_summary`：已记录的 contextPressure/contextBreakdown 汇总，附 asOfSeq、计量依据和缺失原因。
+- `snapshot_ref`：`{session_id, read_seq, map_id}`。`read_seq` 为包含上界事件的源读取上界，空源为 -1；`map_id` 仅用于诊断，不用于查找缓存快照。
+- `source`：来源类型及 replacement/content generation 诊断信息。
+- `window` 与 `nodes`：当前窗口位置、returned/total 节点数、locator，以及逐节点来源、预览、导航和估价。空/dormant 节点保留位置，可无消息且估计 token 数为零。
+- `preview_basis`、`preview_truncated`：逐节点说明预览来自 Session 消息解释，以及是否截断。
+- `metering`：计量可用性、依据、缺失原因、计量日志修订值、节点总估价及上下文总量。
+- `spans`：overview 的有界连续区段，包含首尾 anchor、Surface 位置、节点数、估价和占比；messages 返回空数组。
+- `context_summary`：已记录的 pressure/breakdown 汇总，附 `as_of_seq`、计量依据和缺失原因。
 
-`session_id + read_seq` 可直接交给已有读取工具。Turn/Step 导航依据实际边界生成，缺证据为 unknown。locator 描述目标位置；ACP 提交时负责核对当前目标及保护规则。
+回读节点时，把 `snapshot_ref.session_id` 与节点自己的 `read_seq` 交给已有读取工具。Turn/Step 导航依据实际边界生成，缺证据为 null；未知 role/source/form 为 `unknown`，缺失计量为 null。locator 描述目标位置；ACP 提交时负责核对当前目标及保护规则。完整字段类型见[公开地图类型](<../../src/context-map-types.ts>)。
 
 ### 计量依据
 
@@ -55,9 +55,9 @@ session-tools 提供只读地图，供模型浏览上下文，也供树外 ACP�
 
 预览来自 Session 当前消息解释；meter 对同一 Session 日志独立折叠原事件，并应用其 image/offload 与附件路由计量。二者分别标明 basis：节点按 seq 对齐，但预览文字与计量所依据的文本可能不同，插件消息改写和最终 provider wire 转换也可能影响实际用量。
 
-容量占比仅在同采样 requestContext 与 header 的 provider/model 匹配、contextWindow 有效时提供，否则 unknown。无 meter 时仍返回节点和已知汇总。
+容量占比仅在同采样 requestContext 与 header 的 provider/model 匹配、contextWindow 有效时提供，否则为 null 并给出原因。无 meter 时仍返回节点和已知汇总。
 
-已记录汇总使用 `projectionMode: all`，仅节点地图使用 none。汇总分子优先 projectedTokens，否则 pressureTokens；缺 baseline/容量时标 unknown。breakdown 的 heuristic system/tools/messages 中，tools 指 schemas、工具结果归 messages；三类之和可能与占用分子不同。汇总用于展示，ACP 的执行判断使用自己的计量输入。
+`getContextMap` 使用 `projectionMode: all` 取得已记录汇总；只需节点的其他 consumer 可用 none 采样后调用纯 builder。`context_summary` 保留 projection 的 pressure/breakdown 值及其 `as_of_seq`，不重新计算占用率；缺失 projection 为 null，并给出原因。breakdown 中的 tools 指 schemas、工具结果归 messages；三类之和可能与 pressure/projected 总量不同。汇总用于展示，ACP 的执行判断使用自己的计量输入。
 
 ### 读取成本
 
