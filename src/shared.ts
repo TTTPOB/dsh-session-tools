@@ -23,7 +23,7 @@ export function caller(exec: ToolRunContext, scope: string | undefined): { cwd?:
   if (scope !== undefined && scope !== 'project' && scope !== 'all') throw new Error('scope must be project or all')
   const cwd = exec.agent.session.header.cwd
   if (scope !== 'all' && cwd === undefined) throw new Error('project scope requires caller session header.cwd; use scope all explicitly')
-  return { cwd, id: exec.agent.session.id, project: scope !== 'all' }
+  return { ...(cwd === undefined ? {} : { cwd }), id: exec.agent.session.id, project: scope !== 'all' }
 }
 /** Reject a target outside the calling project. */
 export function authorize(header: SessionHeader, access: ReturnType<typeof caller>): void {

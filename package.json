@@ -1,6 +1,6 @@
 {
   "name": "dsh-session-tools",
-  "version": "0.1.5",
+  "version": "0.2.0",
   "description": "Indexed, project-scoped DSH session browsing tools",
   "type": "module",
   "main": "dist/index.js",
@@ -8,7 +8,8 @@
   "files": [
     "dist",
     "LICENSE",
-    "README.md"
+    "README.md",
+    "docs/map-budgets.md"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
@@ -20,13 +21,19 @@
     "@deepseek-ai/dsh-session": "0.1.7-rc.2-fork1",
     "@deepseek-ai/dsh-session-projection": "0.1.7-rc.2",
     "@deepseek-ai/dsh-session-projection-cache": "0.1.7-rc.2",
-    "@deepseek-ai/dsh-session-query": "0.1.7-rc.2-fork3",
+    "@deepseek-ai/dsh-session-query": "0.1.7-rc.2-fork4",
     "@deepseek-ai/dsh-tools": "0.1.7-rc.2",
     "@deepseek-ai/dsh-workspace": "0.1.7-rc.2",
-    "@deepseek-ai/schemastery": "3.18.4"
+    "@deepseek-ai/schemastery": "3.18.4",
+    "@deepseek-ai/dsh-token-meter": "0.1.7-rc.2"
   },
   "peerDependenciesMeta": {
-    "@deepseek-ai/dsh-session-projection-cache": { "optional": true }
+    "@deepseek-ai/dsh-session-projection-cache": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-token-meter": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "4.0.4",
@@ -38,14 +45,25 @@
     "@deepseek-ai/dsh-session-persistence-jsonl": "0.1.7-rc.2",
     "@deepseek-ai/dsh-session-projection": "0.1.7-rc.2",
     "@deepseek-ai/dsh-session-projection-cache": "0.1.7-rc.2",
-    "@deepseek-ai/dsh-session-query": "https://github.com/TTTPOB/deepseek-harness/releases/download/daily-driver-v0.1.7-rc.2-fork16/deepseek-ai-dsh-session-query-0.1.7-rc.2-fork3.tgz",
+    "@deepseek-ai/dsh-session-query": "0.1.7-rc.2-fork4",
     "@deepseek-ai/dsh-session-query-sqlite": "https://github.com/TTTPOB/deepseek-harness/releases/download/daily-driver-v0.1.7-rc.2-fork16/deepseek-ai-dsh-session-query-sqlite-0.1.7-rc.2-fork6.tgz",
     "@deepseek-ai/dsh-system-prompt": "0.1.7-rc.2",
     "@deepseek-ai/dsh-tools": "0.1.7-rc.2",
     "@deepseek-ai/dsh-workspace": "0.1.7-rc.2",
     "@deepseek-ai/schemastery": "3.18.4",
     "@types/node": "^26.6.3",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "@deepseek-ai/dsh-token-meter": "0.1.7-rc.2"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./context-map": {
+      "types": "./dist/context-map.d.ts",
+      "import": "./dist/context-map.js"
+    }
+  }
 }

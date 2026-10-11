@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { apply } from '../dist/index.js'
 
-const config = { pageSize: 30, maxPageSize: 100, previewChars: 240, outputBytes: 24576, searchTimeoutMs: 30000, eventReadCacheEntries: 8, eventReadCacheBytes: 67108864, readTimeoutMs: 30000, readBatchSize: 128, readSupplementalEvents: 1024, readProcessingBytes: 8388608, readSeqSpan: 4096, projectionStringChars: 2000, projectionItems: 32, projectionDepth: 8, projectionNodes: 512 }
+const config = { mapPageSize: 20, mapMaxPageSize: 100, mapMaxSpans: 12, pageSize: 30, maxPageSize: 100, previewChars: 240, outputBytes: 24576, searchTimeoutMs: 30000, eventReadCacheEntries: 8, eventReadCacheBytes: 67108864, readTimeoutMs: 30000, readBatchSize: 128, readSupplementalEvents: 1024, readProcessingBytes: 8388608, readSeqSpan: 4096, projectionStringChars: 2000, projectionItems: 32, projectionDepth: 8, projectionNodes: 512 }
 function setup(query, options = {}) {
   const definitions = new Map()
   let cleanup
@@ -16,6 +16,7 @@ const header = (id, cwd = '/one') => ({ id, cwd, createdAt: 1 })
 const rows = [header('a'), header('b', '/two'), header('self')].map(header => ({ header, live: false, persisted: true }))
 function provider(extra = {}) {
   return {
+    captureSession: async () => { throw new Error('Unexpected map capture') },
     async pageSessions(request) {
       const source = await (extra.listSessions?.() ?? rows)
       const visible = source.filter(row => !request.filters?.length || row.header.cwd === request.filters[0].values[0])
@@ -57,8 +58,8 @@ function provider(extra = {}) {
   }
 }
 const run = (fixture, tool, args) => fixture.definitions.get(tool).execute(args, fixture.exec)
-test('all seven native-object tools register and dispose', () => {
-  const fixture = setup(provider()); assert.equal(fixture.definitions.size, 7)
+test('all eight native-object tools register and dispose', () => {
+  const fixture = setup(provider()); assert.equal(fixture.definitions.size, 8)
   fixture.dispose(); assert.equal(fixture.definitions.size, 0)
 })
 test('project exact cwd and explicit all; missing cwd rejects project', async () => {
@@ -335,13 +336,16 @@ test('config schema defaults and rejects invalid values', async () => {
   assert.deepEqual(Config({}), config)
   assert.throws(() => Config({ outputBytes: 128 }), /outputBytes/)
   assert.throws(() => Config({ searchTimeoutMs: 0 }), /searchTimeoutMs/)
-  for (const key of ['readTimeoutMs', 'readBatchSize', 'projectionItems', 'projectionDepth', 'projectionNodes']) assert.throws(() => Config({ [key]: 0 }), new RegExp(key))
+  for (const key of ['mapPageSize', 'mapMaxPageSize', 'mapMaxSpans', 'readTimeoutMs', 'readBatchSize', 'projectionItems', 'projectionDepth', 'projectionNodes']) assert.throws(() => Config({ [key]: 0 }), new RegExp(key))
   assert.throws(() => Config({ readSupplementalEvents: -1 }), /readSupplementalEvents/)
   assert.throws(() => Config({ readProcessingBytes: 0 }), /readProcessingBytes/)
   assert.throws(() => Config({ readSeqSpan: -1 }), /readSeqSpan/)
   assert.throws(() => Config({ eventReadCacheEntries: -1 }), /eventReadCacheEntries/)
   assert.throws(() => Config({ eventReadCacheBytes: -1 }), /eventReadCacheBytes/)
   assert.throws(() => setup(provider(), { pageSize: 90, maxPageSize: 10 }), /pageSize/)
+  assert.throws(() => setup(provider(), { mapPageSize: 90, mapMaxPageSize: 10 }), /mapPageSize/)
+  const oldQuery = provider(); delete oldQuery.captureSession
+  assert.throws(() => setup(oldQuery), /captureSession/)
 })
 test('long cursor cannot escape final output UTF-8 budget', async () => {
   const f = setup(provider({ searchEvents: async () => ({ session: header('a'), items: [{ seq: 0, type: 'user/message', snippet: '短句' }], nextCursor: 'x'.repeat(2000) }) }), { outputBytes: 1024 })

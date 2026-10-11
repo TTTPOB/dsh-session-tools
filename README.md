@@ -1,6 +1,6 @@
 # dsh-session-tools
 
-Independent DSH 0.1.7-rc.2 Cordis consumer for indexed session search and exact session browsing. This package does **not** contribute a bundle or replace a provider. It reads sessions through `ctx.sessionQuery`, optionally reads zero-I/O title hints from `ctx.sessionProjectionCache`, and obtains the current-step boundary from `ctx.sessionProjections`; it never opens or decompresses session files. Built-in `session_search`, `session_event_search`, `session_event_read`, `session_trace`, and `session_event_trace` may already be registered by a profile: disable the built-in consumer before enabling these replacements. The seven tools here replace the old `agent_session_search`, `agent_session_list`, and `agent_session_read` entries from `dsh-session-search-pro`; do not register both consumer sets simultaneously.
+Independent DSH 0.1.7-rc.2 Cordis consumer for indexed session search and exact session browsing. This package does **not** contribute a bundle or replace a provider. It reads sessions through `ctx.sessionQuery`, optionally reads zero-I/O title hints from `ctx.sessionProjectionCache`, and obtains the current-step boundary from `ctx.sessionProjections`; it never opens or decompresses session files. Built-in `session_search`, `session_event_search`, `session_event_read`, `session_trace`, and `session_event_trace` may already be registered by a profile: disable the built-in consumer before enabling these replacements. The eight tools here replace the old `agent_session_search`, `agent_session_list`, and `agent_session_read` entries from `dsh-session-search-pro`; do not register both consumer sets simultaneously.
 
 The plugin requires `workspaceRegistry` from `@deepseek-ai/dsh-workspace` alongside its query, projection, and tool services; Cordis waits for these services before registering the tools.
 
@@ -15,6 +15,18 @@ Both searches use **only** `searchSessions` and `searchEvents` and return indexe
 Search covers the existing extractor rules: user/assistant messages, ordinary tool calls/results, todos, and some turn-end outcomes; empty extracted text produces no document. PTC dispatch records and their child-tool errors have no independent FTS documents. Detail previews can expose fields that are not indexed, including result error reason/meta. No match does not mean no record: use List or known event/call locators, then Detail or Raw to investigate. Snippets are index excerpts, not complete events or activity summaries.
 
 `session_list` and `session_search` return compact `session_id` and display-hint `title` (`cwd` only under `all`); listing returns `items`, `has_more`, `next_cursor`. Cold results may use the optional `sessionProjectionCache` service's lifecycle/version-checked current or predecessor title checkpoint without log reads or durable writes. Only cache-backed titles include `title_cached: true`; these hints can lag the latest rename. Explicit cached null is a hit displayed as `(untitled)`, not a reason to read the log. Without the service or a usable title, only unresolved IDs use the existing batched `readTitleSnapshots`; those results omit `title_cached`. Live records or cheaply available live Sessions also use that exact query read rather than stale checkpoints. Cache read failures propagate, not silently fall back. Headers, IDs, cwd, snippets, and authorization still come from query records/search hits, never the cache; the complete QueryEngine title API is unchanged.
+
+## 当前上下文地图
+
+`session_context_map` 显示当前已提交 Surface，节点按模型上下文位置排列，不按 seq 数值排序。省略 `session_id` 读取调用会话；每次调用重新采样，`window: {anchor: {seq, edge: "before" | "after"}, side: "before" | "after" | "around"}` 定位当前窗口。省略 window 显示尾部窗口，limit 默认 20、最大 100；旧 anchor 被替换则明确失败并要求重新定位。`view: "overview"`（默认）附最多 12 个连续 spans，均匀分割整个 Surface；`messages` 仅返回节点窗口。地图不提供 cursor、TTL 或旧地图分页。
+
+结果的 `snapshot_ref: {session_id, read_seq, map_id}` 只在该字段内保存采样标识；read_seq 是 source cut 的 inclusive 上界，空源为 -1。节点 `read_seq` 可直接交给已有 Read/Raw，`locator: {start, end}` 是 Surface 边界，end 解为 exclusive index。`source` 保存来源与 replacement/content generation 诊断；空/dormant 节点保留位置及 producer 已声明的身份。节点的 role/source/form 来自 Session 消息解释，form 是 notice/instructions 等语义，未声明为 unknown；导航仅使用实际 Turn/Step 边界。预览按 Unicode code points 裁剪并报告 basis/truncated，不展开附件字节或完整正文。
+
+`metering: "auto"` 默认使用可选 `tokenMeter`，缺服务时返回原因；`none` 不调用 meter，`require` 缺服务即失败。节点计量与 Surface index/seq 严格对齐；预览使用 Session 当前消息解释，meter 独立折叠原事件，二者可能使用不同文本。普通占比以所有 Surface 节点估价之和为分母；容量占比仅在同次 requestContext 与 header 的 provider/model 一致且容量为正时提供。source cut 与 meter log_revision 分开记录，后者可含准备记录。context_summary 保留 all-mode 已记录 pressure/breakdown 的 as_of_seq 和独立依据，不冒充节点计量；tools breakdown 指 schemas。
+
+公开子入口 `dsh-session-tools/context-map` 导出所有 DTO、`getContextMap(ctx, exec, input, options)`、`buildContextMap(reader, observation, measurement, input, options)` 及 `resolveSurfaceAnchor`/`resolveSurfaceRange`。getContextMap 与工具共用精确 caller cwd 授权，授权先于采样；同步 builder 供已持有同次 Session/observation/meter 的消费者投影，不执行 I/O 或授权，调用者负责授权并确保同次采样。两条路径共用完整 JSON UTF-8 outputBytes 预算，超限报错，建议降低 limit 或缩短配置预览。region 定位只依赖当前 Surface 与 start/end anchors，不依赖地图缓存、map_id 或 freshness。通用地图不注入 ACP 保护或压缩收益政策。
+
+地图配置为 `mapPageSize: 20`、`mapMaxPageSize: 100`、`mapMaxSpans: 12`，预览复用 `previewChars: 240`，完整输出复用 `outputBytes: 24576`；[六个本机历史的预算粗测](<docs/map-budgets.md>)支持保留这些默认值。首次 cold 准备可能读取完整 Log，meter 和真实导航可能遍历全部 Surface/Log；缩小展示窗口不保证底层采样更便宜。
 
 ## 事件读取
 
@@ -56,7 +68,7 @@ Raw 缓存仅保存同 provider/session/原 seq 的已准备 code points 与 cap
 
 ## 分页快照与追踪
 
-本包的 Session core 与 Query peers 分别固定为已验证的 `@deepseek-ai/dsh-session 0.1.7-rc.2-fork1`、`@deepseek-ai/dsh-session-query 0.1.7-rc.2-fork3`；开发依赖使用 Harness `daily-driver-v0.1.7-rc.2-fork16` 的对应不可变 tarball 及 SQLite `0.1.7-rc.2-fork6`。Query 依赖新 Session 的 `SurfaceFoldAccumulator`，不能替换成旧官方 Session；不声明未验证版本的兼容范围。运行时要求公开 `pageSessions`、`pageEvents`、`observeSession`，缺失时加载明确失败。其他 DSH peers 保持 0.1.7-rc.2。`session_list` 使用不可变 metadata snapshot cursor，续页保持 scope/limit；新 session 不漂移页。snapshot 内标题来源删除时保留 NOT_FOUND 并提示不带 cursor 重启，不以默认标题掩盖失败。provider 重载、snapshot 超时或淘汰使 cursor 失效。
+本包的 Session core 与 Query peers 分别固定为已验证的 `@deepseek-ai/dsh-session 0.1.7-rc.2-fork1`、`@deepseek-ai/dsh-session-query 0.1.7-rc.2-fork4`；Session 与 SQLite 开发依赖保留 Harness `daily-driver-v0.1.7-rc.2-fork16` 的不可变 tarball；capture-capable Query fork4 的正式发布制品尚未提供。Query 依赖新 Session 的 `SurfaceFoldAccumulator`，不能替换成旧官方 Session；不声明未验证版本的兼容范围。运行时要求公开 `pageSessions`、`pageEvents`、`observeSession`、`captureSession`，缺失时加载明确失败。其他 DSH peers 保持 0.1.7-rc.2。`session_list` 使用不可变 metadata snapshot cursor，续页保持 scope/limit；新 session 不漂移页。snapshot 内标题来源删除时保留 NOT_FOUND 并提示不带 cursor 重启，不以默认标题掩盖失败。provider 重载、snapshot 超时或淘汰使 cursor 失效。
 
 两个 trace 工具返回公开服务提供的完整关系，预算不足报错，不截断 links。`session_trace` 在首个隐藏父节点停止 ancestry，并以 scope_limited 标记隐藏关系；先过滤可见节点再对去重后的标题使用与 List/Search 相同的 helper。cache hint 保留 title_cached:true。
 
@@ -80,7 +92,7 @@ reader 可传入 `options.evidence.pageSourceSeqs`、`coverageComplete`、`incom
 
 ## Build and handoff
 
-Use Node 22.19+ or 24+ and pnpm. Version 0.1.5 uses the verified Session core fork1 / Query fork3 / SQLite fork6 artifacts. Prepare the pinned Session/query/SQLite dependencies with `pnpm install --frozen-lockfile`, then run `pnpm --config.verify-deps-before-run=false check`. The tarball contains built ESM, declarations, README and MIT license. This ordinary plugin has no bundle patch; consumers declare its row explicitly. Its Cordis/DSH service peers use the Host instances through the public profile resolver; Schemastery must match the Host version and pass Host Config validation.
+Use Node 22.19+ or 24+ and pnpm. Version 0.2.0 requires Session core fork1 / capture-capable Query fork4 / SQLite fork6. The Query fork4 Release artifact and regenerated lockfile are pending; the existing fork3 dependency installation cannot load this version. After the immutable Query artifact is available, pin it and regenerate the lockfile through pnpm before running the frozen install and check commands. Source-path focused tests can validate this implementation without changing an existing installation. The tarball contains built ESM, declarations, README and MIT license. This ordinary plugin has no bundle patch; consumers declare its row explicitly. Its Cordis/DSH service peers use the Host instances through the public profile resolver; Schemastery must match the Host version and pass Host Config validation.
 
 `tests/pack-smoke.mjs` checks packaging with explicitly installed peers; `deploy/activate.test.mjs` exercises Host-provided peers without direct profile dependencies. Personal installation and artifact-test procedures are maintained in [dsh-config](../dsh-config/README.md).
 

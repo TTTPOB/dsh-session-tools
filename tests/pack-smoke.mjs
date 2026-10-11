@@ -46,5 +46,7 @@ try {
   const entry = await import(pluginPath)
   assert.equal(entry.name, 'dsh-session-tools')
   assert.equal(typeof entry.apply, 'function')
+  const map = await import(hostRequire.resolve('dsh-session-tools/context-map'))
+  for (const name of ['getContextMap', 'buildContextMap', 'resolveSurfaceAnchor', 'resolveSurfaceRange']) assert.equal(typeof map[name], 'function', `public map export ${name}`)
   console.log('Packaging-only smoke passed with explicitly installed peers; this is NOT Host-provided profile-peer validation. Run deploy/activate.test.mjs and --check-only against the consuming profile.')
 } finally { rmSync(root, { recursive: true, force: true }) }

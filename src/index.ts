@@ -10,6 +10,7 @@ import type { SessionRecord, SessionSearchCursor, SessionEventMetadataFilter } f
 import { integer, bounded, trim, record, caller, authorize, searchError } from './shared.js'
 import { output, scopeParam, targetParam, limitParam, call } from './definitions.js'
 import { readTools } from './read-tools.js'
+import { contextMapTool } from './context-map-tool.js'
 
 /** Loader-visible plugin identity. */
 export const name = 'dsh-session-tools'
@@ -18,6 +19,7 @@ export const inject = ['tools', 'sessionQuery', 'sessionProjections', 'workspace
 /** Limits applied to native output, indexed searches and prepared event fragments. */
 export interface Config {
   pageSize: number; maxPageSize: number; previewChars: number; outputBytes: number
+  mapPageSize: number; mapMaxPageSize: number; mapMaxSpans: number
   searchTimeoutMs: number; readTimeoutMs: number; readBatchSize: number
   readSupplementalEvents: number; readProcessingBytes: number; readSeqSpan: number
   projectionStringChars: number; projectionItems: number; projectionDepth: number; projectionNodes: number
@@ -25,6 +27,9 @@ export interface Config {
 }
 /** Loader-validated defaults and numeric limits. */
 export const Config: Schema<Config> = Schema.object({
+  mapPageSize: Schema.number().step(1).min(1).max(100).default(20),
+  mapMaxPageSize: Schema.number().step(1).min(1).max(100).default(100),
+  mapMaxSpans: Schema.number().step(1).min(1).max(100).default(12),
   pageSize: Schema.number().step(1).min(1).max(100).default(30),
   maxPageSize: Schema.number().step(1).min(1).max(100).default(100),
   previewChars: Schema.number().step(1).min(0).max(4000).default(240),
@@ -42,13 +47,14 @@ export const Config: Schema<Config> = Schema.object({
   eventReadCacheEntries: Schema.number().step(1).min(0).max(1000).default(8),
   eventReadCacheBytes: Schema.number().step(1).min(0).max(1073741824).default(67108864),
 })
-/** Register seven reversible, native-object session query tools.
+/** Register eight reversible, native-object session query tools.
  * @param ctx - Cordis services shared with the active agent.
  * @param config - Validated page, preview, output, and search timeout limits.
  */
 export function apply(ctx: Context, config: Config): void {
   const { pageSize, maxPageSize, previewChars, outputBytes, searchTimeoutMs } = config
-  if (typeof ctx.sessionQuery.pageSessions !== 'function' || typeof ctx.sessionQuery.pageEvents !== 'function' || typeof ctx.sessionQuery.observeSession !== 'function') throw new Error('dsh-session-tools requires sessionQuery pageSessions/pageEvents/observeSession (query 0.1.7-rc.2-fork2 or a compatible engine)')
+  if (typeof ctx.sessionQuery.pageSessions !== 'function' || typeof ctx.sessionQuery.pageEvents !== 'function' || typeof ctx.sessionQuery.observeSession !== 'function' || typeof ctx.sessionQuery.captureSession !== 'function') throw new Error('dsh-session-tools requires sessionQuery pageSessions/pageEvents/observeSession/captureSession (capture-capable Query peer required)')
+  if (config.mapPageSize > config.mapMaxPageSize) throw new RangeError('mapPageSize cannot exceed mapMaxPageSize')
   if (pageSize > maxPageSize) throw new RangeError('pageSize cannot exceed maxPageSize')
   const size = (n?: number) => { const value = integer(n, 'limit', pageSize, maxPageSize); if (!value) throw new RangeError('limit must be positive'); return value }
   const id = (text: string) => { if (!text.trim()) throw new Error('session_id is required'); return SessionId(text) }
@@ -194,6 +200,7 @@ export function apply(ctx: Context, config: Config): void {
       eventReadCacheEntries: config.eventReadCacheEntries, eventReadCacheBytes: config.eventReadCacheBytes,
     })
     for (const tool of reads.tools) add(tool)
+    add(contextMapTool(ctx, config))
     return () => { reads.dispose(); for (const dispose of disposers.reverse()) dispose() }
   })
 }
