@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, rmSync, writeFileSync, realpathSync, readFileSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync, realpathSync, readFileSync, copyFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
 import { createRequire } from 'node:module'
@@ -14,22 +14,26 @@ const forkPackages = forkNames.map(name => {
   assert.match(spec, /^https:\/\/github\.com\/TTTPOB\/deepseek-harness\/releases\/download\/[^/]+\/[^/]+\.tgz$/, `immutable artifact for ${name}`)
   return spec
 })
+const env = { ...process.env, npm_config_verify_deps_before_run: 'false' }
 const root = mkdtempSync(join(tmpdir(), 'dsh-session-tools-pack-'))
 try {
-  writeFileSync(join(root, 'package.json'), JSON.stringify({ name: 'session-tools-smoke', private: true, type: 'module' }))
+  writeFileSync(join(root, 'package.json'), JSON.stringify({
+    name: 'session-tools-smoke', private: true, type: 'module',
+    devDependencies: { typescript: manifest.devDependencies.typescript, '@types/node': manifest.devDependencies['@types/node'] },
+  }))
   const { version } = manifest
-  execFileSync('pnpm', ['--config.verify-deps-before-run=false', 'pack', '--pack-destination', root], { cwd: source, stdio: 'pipe' })
+  execFileSync('pnpm', ['--config.verify-deps-before-run=false', 'pack', '--pack-destination', root], { cwd: source, env, stdio: 'pipe' })
   execFileSync('pnpm', ['--config.verify-deps-before-run=false', '--config.auto-install-peers=false', 'add',
     join(root, `dsh-session-tools-${version}.tgz`),
     '@deepseek-ai/cordis@4.0.4', '@deepseek-ai/dsh-tools@0.1.7-rc.2',
     ...forkPackages, '@deepseek-ai/dsh-workspace@0.1.7-rc.2',
     '@deepseek-ai/dsh-session-projection@0.1.7-rc.2', '@deepseek-ai/schemastery@3.18.4',
     ...['agent','ptc-runtime','invariants','llm','scope','system-prompt','user-approval','sandbox','sandbox-policy','session-title','tool-todo','session-persistence'].map(x => `@deepseek-ai/dsh-${x}@0.1.7-rc.2`),
-  ], { cwd: root, stdio: 'pipe' })
+  ], { cwd: root, env, stdio: 'pipe' })
   const hostRequire = createRequire(join(root, 'package.json'))
   const pluginUrl = execFileSync(process.execPath, ['--input-type=module', '-e',
     "console.log(import.meta.resolve('dsh-session-tools'))",
-  ], { cwd: root, encoding: 'utf8' }).trim()
+  ], { cwd: root, env, encoding: 'utf8' }).trim()
   const pluginPath = fileURLToPath(pluginUrl)
   const pluginRequire = createRequire(pluginPath)
   for (const name of ['@deepseek-ai/cordis', '@deepseek-ai/dsh-tools', '@deepseek-ai/dsh-session', '@deepseek-ai/dsh-session-query', '@deepseek-ai/dsh-session-projection', '@deepseek-ai/dsh-workspace']) {
@@ -49,9 +53,13 @@ try {
   const entry = await import(pluginPath)
   assert.equal(entry.name, 'dsh-session-tools')
   assert.equal(typeof entry.apply, 'function')
-  const installedManifest = JSON.parse(readFileSync(join(dirname(pluginPath), '..', 'package.json'), 'utf8'))
-  const declarations = readFileSync(join(dirname(pluginPath), '..', installedManifest.types), 'utf8')
-  assert.match(declarations, /export declare function apply\(/)
+  copyFileSync(join(source, 'tests', 'fixtures', 'config-consumer.mts'), join(root, 'config-consumer.mts'))
+  writeFileSync(join(root, 'tsconfig.json'), JSON.stringify({
+    compilerOptions: { target: 'ES2023', module: 'NodeNext', moduleResolution: 'NodeNext', strict: true, noEmit: true },
+    include: ['config-consumer.mts'],
+  }))
+  execFileSync(process.execPath, [hostRequire.resolve('typescript/bin/tsc'), '-p', 'tsconfig.json'], { cwd: root, env, stdio: 'inherit' })
+  console.log('Strict NodeNext TypeScript consumer passed against the installed package root.')
   const tools = new Map()
   let dispose
   entry.apply({

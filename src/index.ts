@@ -23,8 +23,10 @@ export interface Config {
   projectionStringChars: number; projectionItems: number; projectionDepth: number; projectionNodes: number
   eventReadCacheEntries: number; eventReadCacheBytes: number
 }
-/** Loader-validated defaults and numeric limits. */
-export const Config: Schema<Config> = Schema.object({
+/** Config fields may be omitted or null to use their schema defaults. */
+export type ConfigInput = { [K in keyof Config]?: Config[K] | null }
+/** Validate optional numeric input and return every configured limit. */
+export const Config: Schema<ConfigInput, Config> = Schema.object({
   pageSize: Schema.number().step(1).min(1).max(100).default(30),
   maxPageSize: Schema.number().step(1).min(1).max(100).default(100),
   previewChars: Schema.number().step(1).min(0).max(4000).default(240),

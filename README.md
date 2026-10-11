@@ -34,7 +34,7 @@ Raw 缓存仅保存同 provider/session/原 seq 的已准备 code points 与 cap
 
 ### 配置与预算
 
-所有预算通过插件 `Config` 配置，不需要改源码。默认值如下：
+所有预算通过插件 `Config` 配置，不需要改源码。TypeScript 消费方从包根导入 `Config` schema 和类型：`const config: Config = Config({})` 或 `Config({ pageSize: 10 })` 均返回包含全部数值字段的完整配置。`ConfigInput` 的字段可省略或为 `null`，由 schema 补默认值；指定的非空字段必须为数值。Cordis 加载插件时使用同一个 schema 校验配置，`apply` 接收完整的 `Config`。默认值如下：
 
 | 字段 | 默认值 | 控制内容 |
 |---|---:|---|
