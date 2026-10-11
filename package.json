@@ -44,7 +44,7 @@
     "@deepseek-ai/dsh-session-persistence-jsonl": "0.1.7-rc.2",
     "@deepseek-ai/dsh-session-projection": "0.1.7-rc.2",
     "@deepseek-ai/dsh-session-projection-cache": "0.1.7-rc.2",
-    "@deepseek-ai/dsh-session-query": "0.1.7-rc.2-fork4",
+    "@deepseek-ai/dsh-session-query": "https://github.com/TTTPOB/deepseek-harness/releases/download/daily-driver-v0.1.7-rc.2-fork17/deepseek-ai-dsh-session-query-0.1.7-rc.2-fork4.tgz",
     "@deepseek-ai/dsh-session-query-sqlite": "https://github.com/TTTPOB/deepseek-harness/releases/download/daily-driver-v0.1.7-rc.2-fork16/deepseek-ai-dsh-session-query-sqlite-0.1.7-rc.2-fork6.tgz",
     "@deepseek-ai/dsh-system-prompt": "0.1.7-rc.2",
     "@deepseek-ai/dsh-tools": "0.1.7-rc.2",
