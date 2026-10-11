@@ -1,6 +1,8 @@
 # ADR 0004：通用 Surface 地图与同源计量
 
-- 状态：Accepted（已采纳）
+- 状态：Superseded（被后续决策取代），由 [ACP ADR 0003：原文字面锚点](<../../../dsh-active-context/docs/adr/0003-text-anchored-compaction.md>)取代模型地图设计，以新 ADR 为准。
+
+替代范围为 `session_context_map` 模型工具、map-specific 公共库/API、`snapshot_ref` 与 seq/edge 定位、地图展示预算及 ACP 地图消费者；这些专用接口随消费者一并移除。Query `captureSession` 同步采样、tokenMeter 及其计量依据仍可独立复用，现有 session/event read、search、trace 的职责不变。本状态不表示底层 Query 或 token-meter 决策作废。下文保留为原地图设计记录。
 
 ## 背景
 
