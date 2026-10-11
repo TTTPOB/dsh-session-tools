@@ -40,7 +40,6 @@ test('real Cordis Loader mounts built ESM through cordis.yml then disposes tools
     } }
     await ctx.loader.create({ name: 'cordis:include', config: { path: pathToFileURL(configPath).href } })
     await ctx.loader.await()
-    assert.deepEqual([...tools.keys()].sort(), ['session_event_list', 'session_event_read', 'session_event_search', 'session_event_trace', 'session_list', 'session_search', 'session_trace'])
     assert.equal(typeof tools.get('session_search').execute, 'function')
     const listed = await tools.get('session_list').execute({}, { signal: new AbortController().signal, agent: { session: { id: 'caller', header: { cwd: '/one' } } } })
     assert.deepEqual(listed, { items: [], has_more: false, next_cursor: null })

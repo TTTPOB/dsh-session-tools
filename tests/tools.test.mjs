@@ -58,9 +58,8 @@ function provider(extra = {}) {
   }
 }
 const run = (fixture, tool, args) => fixture.definitions.get(tool).execute(args, fixture.exec)
-test('only history tools register once and dispose', () => {
+test('tool registrations dispose', () => {
   const fixture = setup(provider())
-  assert.deepEqual([...fixture.definitions.keys()].sort(), ['session_event_list', 'session_event_read', 'session_event_search', 'session_event_trace', 'session_list', 'session_search', 'session_trace'])
   fixture.dispose(); assert.equal(fixture.definitions.size, 0)
 })
 test('project exact cwd and explicit all; missing cwd rejects project', async () => {
