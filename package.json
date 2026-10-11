@@ -8,8 +8,7 @@
   "files": [
     "dist",
     "LICENSE",
-    "README.md",
-    "docs/map-budgets.md"
+    "README.md"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
