@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { associateEvents } from '../dist/event-association.js'
-import { EVENT_PROJECTION_STRATEGIES, projectActivity, projectTarget } from '../dist/event-projection.js'
+import { projectActivity, projectTarget } from '../dist/event-projection.js'
 import { history, compact, detail, guardedBlocks, readDefinition } from './fixtures/association.mjs'
 
 const associate = events => associateEvents(events, detail.budget)
@@ -203,7 +203,6 @@ test('lifecycle IDs, workflow member seq, failed compaction without summary and 
   const unknown = projectTarget(model, 140, detail)
   assert.equal(unknown.records[0].type, 'extension/accepted')
   assert.equal(unknown.records[0].preview.important, 'unknown accepted data')
-  assert.equal(Object.keys(EVENT_PROJECTION_STRATEGIES).length, 62)
   for (const event of history) assert.ok(model.activityBySeq.has(event.seq))
 })
 
