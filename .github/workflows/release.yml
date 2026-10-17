@@ -8,7 +8,6 @@ on:
       tag:
         description: Existing immutable source tag to publish
         required: true
-        default: v0.2.0
         type: string
 
 permissions:
@@ -25,6 +24,7 @@ jobs:
       contents: write
     env:
       RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+      NODE_OPTIONS: --max-old-space-size=4096
       npm_config_verify_deps_before_run: 'false'
     steps:
       - uses: actions/checkout@v6
@@ -33,7 +33,7 @@ jobs:
           persist-credentials: false
       - uses: pnpm/action-setup@v4
         with:
-          version: 11.24.0
+          version: 11.28.5
       - uses: actions/setup-node@v6
         with:
           node-version: '24'
@@ -59,4 +59,4 @@ jobs:
             exit 1
           fi
           version=$(node -p 'JSON.parse(require("fs").readFileSync("package.json")).version')
-          gh release create "$RELEASE_TAG" "dist/release/dsh-session-tools-$version.tgz" dist/release/SHA256SUMS --verify-tag --title "$RELEASE_TAG" --notes 'Shared Compact/Detail reading uses one fixed SessionObservation with bounded supplemental reads, processing and output budgets; explicit Raw preserves exact events and Unicode continuation. Indexed surface-aware search retains provider cursors, archived-session filtering and zero-I/O cached title hints without log-scan fallback. Requires Session core fork1 and capture-capable Query fork4 peers; development dependencies pin SQLite fork6 artifacts. Other DSH service peers remain rc.2. Installation and Host activation require separate authorization.'
+          gh release create "$RELEASE_TAG" "dist/release/dsh-session-tools-$version.tgz" dist/release/SHA256SUMS --verify-tag --title "$RELEASE_TAG" --notes 'Shared Compact/Detail reading uses one fixed SessionObservation with bounded supplemental reads, processing and output budgets; explicit Raw preserves exact events and Unicode continuation. Indexed surface-aware search retains provider cursors, archived-session filtering and zero-I/O cached title hints without log-scan fallback. Requires exact Session core and capture-capable Query 0.2.1-rc.1-fork1 peers; development dependencies pin the matching SQLite and JSONL fork assets. Other DSH service peers remain 0.2.1-rc.1. Installation and Host activation require separate authorization.'
