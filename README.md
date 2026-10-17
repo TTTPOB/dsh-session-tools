@@ -1,6 +1,6 @@
 # dsh-session-tools
 
-Independent DSH 0.1.7-rc.2 Cordis consumer for indexed session search and exact session browsing. This package does **not** contribute a bundle or replace a provider. It reads sessions through `ctx.sessionQuery`, optionally reads zero-I/O title hints from `ctx.sessionProjectionCache`, and obtains the current-step boundary from `ctx.sessionProjections`; it never opens or decompresses session files. Built-in `session_search`, `session_event_search`, `session_event_read`, `session_trace`, and `session_event_trace` may already be registered by a profile: disable the built-in consumer before enabling these replacements. The tools here replace the old `agent_session_search`, `agent_session_list`, and `agent_session_read` entries from `dsh-session-search-pro`; do not register both consumer sets simultaneously.
+Independent DSH 0.2.1-rc.1 Cordis consumer for indexed session search and exact session browsing. This package does **not** contribute a bundle or replace a provider. It reads sessions through `ctx.sessionQuery`, optionally reads zero-I/O title hints from `ctx.sessionProjectionCache`, and obtains the current-step boundary from `ctx.sessionProjections`; it never opens or decompresses session files. Built-in `session_search`, `session_event_search`, `session_event_read`, `session_trace`, and `session_event_trace` may already be registered by a profile: disable the built-in consumer before enabling these replacements. The tools here replace the old `agent_session_search`, `agent_session_list`, and `agent_session_read` entries from `dsh-session-search-pro`; do not register both consumer sets simultaneously.
 
 The plugin requires `workspaceRegistry` from `@deepseek-ai/dsh-workspace` alongside its query, projection, and tool services; Cordis waits for these services before registering the tools.
 
@@ -56,7 +56,7 @@ Raw 缓存仅保存同 provider/session/原 seq 的已准备 code points 与 cap
 
 ## 分页快照与追踪
 
-本包的 Session core 与 Query peers 分别要求 `@deepseek-ai/dsh-session 0.1.7-rc.2-fork1`、`@deepseek-ai/dsh-session-query 0.1.7-rc.2-fork4`。Query 依赖新 Session 的 `SurfaceFoldAccumulator`，不能替换成旧官方 Session；不声明未验证版本的兼容范围。运行时要求公开 `pageSessions`、`pageEvents`、`observeSession`、`captureSession`，缺失时加载明确失败。其他 DSH peers 保持 0.1.7-rc.2。`session_list` 使用不可变 metadata snapshot cursor，续页保持 scope/limit；新 session 不漂移页。snapshot 内标题来源删除时保留 NOT_FOUND 并提示不带 cursor 重启，不以默认标题掩盖失败。provider 重载、snapshot 超时或淘汰使 cursor 失效。
+本包的 Session core 与 Query peers 分别要求 `@deepseek-ai/dsh-session 0.2.1-rc.1-fork1`、`@deepseek-ai/dsh-session-query 0.2.1-rc.1-fork1`。Query 依赖新 Session 的 `SurfaceFoldAccumulator`，不能替换成旧官方 Session；不声明未验证版本的兼容范围。运行时要求公开 `pageSessions`、`pageEvents`、`observeSession`、`captureSession`，缺失时加载明确失败。其他 DSH peers 固定为 0.2.1-rc.1，Cordis 为 4.0.5，Schemastery 为 3.18.5。`session_list` 使用不可变 metadata snapshot cursor，续页保持 scope/limit；新 session 不漂移页。snapshot 内标题来源删除时保留 NOT_FOUND 并提示不带 cursor 重启，不以默认标题掩盖失败。provider 重载、snapshot 超时或淘汰使 cursor 失效。
 
 两个 trace 工具返回公开服务提供的完整关系，预算不足报错，不截断 links。`session_trace` 在首个隐藏父节点停止 ancestry，并以 scope_limited 标记隐藏关系；先过滤可见节点再对去重后的标题使用与 List/Search 相同的 helper。cache hint 保留 title_cached:true。
 
@@ -65,6 +65,8 @@ Raw 缓存仅保存同 provider/session/原 seq 的已准备 code points 与 cap
 [src/event-association.ts](src/event-association.ts) 的 `associateEvents(events, budget)` 接受同一次读取已取得的逻辑事件及现有预算，返回共享的 `activities`、`activityBySeq`、`toolBySeq` 与 `tools`。关联时以 `maxItems`／`maxNodes` 限制助手调用块的实际访问，并保存已发现块的直接参数证据；Compact 和 Detail 复用同一关联结果和关联预算。被略过的调用块以 `limitedBlockSeqs` 及活动的 `tool_blocks_not_fully_associated` 缺口保留，不能据此声称整个活动已读齐。同一显式 turn/step 的助手和工具组成 Step，callId 去重配对，执行记录拥有参数证据；PTC 使用 subCallId 和直接 parentCallId，沿已核实根调用继承 Step。找不到根或直接父链的片段独立保留，缺少结算只表示未观察到结果。压缩、重试、workflow、命令及审批使用各自真实身份，workflow 的成员 seq 不作为 Session seq。
 
 [src/event-projection.ts](src/event-projection.ts) 提供 `projectActivity(model, activity, options)` 和 `projectTarget(model, seq, options)`。target 只展示目标记录或自身工具配对，返回已知 activity/root/parent locator；目标配对和必要引用齐全时，未请求的根、父、兄弟或子调用不算缺失或展示截断。activity 才展示工具树。普通工具展示真实 `surfaceOp: "append"` 的原结果；只有 tool/result replacement 的明确单节点 startSeq/endSeq 引用可在 `maxDepth`／`maxNodes` 内递归定位同一调用的 append 结果。source 集合允许包含额外诊断，不等于被覆盖的节点数。单目标 replacement 的独立活动锚点与 target 复用原结果定位，保留 replacement 自身入口及活动身份，只展示该调用、不扩展其整个 Step。summary/checkpoint 保留独立语义；目标记录和已定位引用保留 seq/read_seq、surface metadata、实际来源与原结果 locator，不重复展开工具节点已展示的参数和结果。本模块不提供 Raw 或改变 Raw 的 requested seq。
+
+`job/registered`、`job/settled` 和 `working-directory/change` 保留有界原字段；`plugin:` 记录标记为 `plugin-record`，保留完整事件类型和 Raw seq 入口，不解释插件私有 payload 或读取相关任务输出。
 
 `options.view` 为 compact/detail。相同预算下，Compact 保留首个可见消息块和首个工具结果块、省略工具参数及错误正文；Detail 展示有界多块内容、参数、错误和 meta。两者保留角色、消息／调用身份、来源类别、工具增删事实及各层错误存在、code 和 seq；Compact 的内容省略标记 `truncated`，不会改变已核实的配对和身份。Developer 的 Detail 从已读到的 `headerSeq` 对应 request/header.tools 有界选取已发现 addition 的定义，放入现有 preview.tools；removal 保留变更身份，不展开定义或整个 header。已核实的 header seq 计入来源集合，headerSeq 保留 Raw 定位入口；header 缺失由 reader 的既有 evidence 表达。Reasoning 和嵌入 stream 不作为普通消息正文展开。
 
@@ -80,7 +82,7 @@ reader 可传入 `options.evidence.pageSourceSeqs`、`coverageComplete`、`incom
 
 ## Development
 
-Use Node 22.19+ or 24+ and pnpm. Run `pnpm --config.verify-deps-before-run=false install --frozen-lockfile` and `pnpm --config.verify-deps-before-run=false check` to build and test. Cordis/DSH service peers use the Host instances through the public profile resolver; Schemastery must match the Host version and pass Host Config validation.
+Use Node 22.19+ or 24+ and pnpm. Install the exact Session/Query forks before running `pnpm --config.verify-deps-before-run=false check`. Generate the lockfile with `pnpm --config.verify-deps-before-run=false install --no-frozen-lockfile`; subsequent installs can use `--frozen-lockfile`. For unpublished forks, use local pnpm overrides pointing to their tarballs. `tests/pack-smoke.mjs` accepts absolute `DSH_SESSION_TARBALL` and `DSH_QUERY_TARBALL` paths for isolated consumer verification; without those variables it installs the declared exact versions. Cordis/DSH service peers use the Host instances through the public profile resolver; Schemastery must match the Host version and pass Host Config validation.
 
 Installation, pinned Release sources and artifact verification are documented in [dsh-config installation](<../dsh-config/docs/install.md>) and [testing](<../dsh-config/docs/testing.md>).
 

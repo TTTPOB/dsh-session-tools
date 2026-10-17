@@ -11,6 +11,7 @@ export const EVENT_PROJECTION_STRATEGIES: Readonly<Record<string, string>> = {
   'deliverables/presented': 'delivery', 'developer/message': 'message',
   'feedback/message-delete': 'bounded-fact', 'feedback/message-put': 'bounded-fact', 'feedback/record': 'bounded-fact',
   'goal/change': 'bounded-fact', 'hook/invoked': 'hook', 'hook/result': 'hook', 'image/offload': 'offload',
+  'job/registered': 'bounded-fact', 'job/settled': 'bounded-fact',
   'llm/retry': 'retry', 'llm/retry-started': 'retry', 'model/selection': 'bounded-fact',
   'permission/preset': 'bounded-fact', 'plan/mode': 'bounded-fact',
   'request/context': 'request', 'request/header': 'request', 'sandbox/mode': 'bounded-fact',
@@ -24,7 +25,12 @@ export const EVENT_PROJECTION_STRATEGIES: Readonly<Record<string, string>> = {
   'tool-workflow/run-end': 'workflow', 'tool-workflow/run-start': 'workflow',
   'tool/call': 'tool', 'tool/ptc-dispatch': 'tool', 'tool/ptc-dispatch-start': 'tool', 'tool/result': 'tool',
   'turn/end': 'boundary', 'turn/start': 'boundary', 'user/message': 'message',
-  'web/deepseek-search-llm-request': 'auxiliary-request', 'workspace/changes': 'bounded-fact',
+  'web/deepseek-search-llm-request': 'auxiliary-request', 'working-directory/change': 'bounded-fact', 'workspace/changes': 'bounded-fact',
+}
+
+/** Plugin records retain their namespace and bounded original payload, without owner interpretation. */
+function projectionStrategy(type: string): string {
+  return type.startsWith('plugin:') ? 'plugin-record' : EVENT_PROJECTION_STRATEGIES[type] ?? 'bounded-fact'
 }
 
 /** Caller-owned display limits; calibrated defaults live in Config. */
@@ -140,7 +146,7 @@ function messageBlocks(content: unknown, eventType: string, view: ProjectionOpti
 
 function previewFields(event: ReadingEvent, view: ProjectionOptions['view'], messagePreview?: unknown, toolDefinitions?: unknown): unknown {
   const d = fields(event.data), message = fields(d.message)
-  const strategy = EVENT_PROJECTION_STRATEGIES[event.type] ?? 'bounded-fact'
+  const strategy = projectionStrategy(event.type)
   if (strategy === 'message') {
     const content = event.type === 'user/message' ? d.content : message.content
     const source = event.type === 'user/message' ? d.source : message.source
@@ -211,7 +217,7 @@ function project(model: EventAssociation, events: readonly ReadingEvent[], tools
   for (const event of events) {
     sourceSeqs.add(event.seq)
     const record: ProjectedRecord = { seq: event.seq, type: event.type, read_seq: event.seq,
-      strategy: EVENT_PROJECTION_STRATEGIES[event.type] ?? 'bounded-fact', ...locator(event), ...errorFacts(event) }
+      strategy: projectionStrategy(event.type), ...locator(event), ...errorFacts(event) }
     const d = fields(event.data)
     const observedTool = model.toolBySeq.get(event.seq)
     if (observedTool && !observedTool.call) reasons.add('call_not_observed')

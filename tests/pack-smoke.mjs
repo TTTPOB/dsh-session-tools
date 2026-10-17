@@ -8,11 +8,14 @@ import { fileURLToPath } from 'node:url'
 
 const source = dirname(dirname(fileURLToPath(import.meta.url)))
 const manifest = JSON.parse(readFileSync(join(source, 'package.json'), 'utf8'))
-const forkNames = ['@deepseek-ai/dsh-session', '@deepseek-ai/dsh-session-query', '@deepseek-ai/dsh-session-query-sqlite']
-const forkPackages = forkNames.map(name => {
-  const spec = manifest.devDependencies[name]
-  assert.match(spec, /^https:\/\/github\.com\/TTTPOB\/deepseek-harness\/releases\/download\/[^/]+\/[^/]+\.tgz$/, `immutable artifact for ${name}`)
-  return spec
+const forkNames = ['@deepseek-ai/dsh-session', '@deepseek-ai/dsh-session-query']
+const forkPackages = forkNames.map((name, index) => {
+  const tarball = process.env[index === 0 ? 'DSH_SESSION_TARBALL' : 'DSH_QUERY_TARBALL']
+  if (tarball) {
+    assert.ok(tarball.startsWith('/') && tarball.endsWith('.tgz'), `absolute local tarball for ${name}`)
+    return `${name}@file:${tarball}`
+  }
+  return `${name}@${manifest.devDependencies[name]}`
 })
 const env = { ...process.env, npm_config_verify_deps_before_run: 'false' }
 const root = mkdtempSync(join(tmpdir(), 'dsh-session-tools-pack-'))
@@ -25,10 +28,10 @@ try {
   execFileSync('pnpm', ['--config.verify-deps-before-run=false', 'pack', '--pack-destination', root], { cwd: source, env, stdio: 'pipe' })
   execFileSync('pnpm', ['--config.verify-deps-before-run=false', '--config.auto-install-peers=false', 'add',
     join(root, `dsh-session-tools-${version}.tgz`),
-    '@deepseek-ai/cordis@4.0.4', '@deepseek-ai/dsh-tools@0.1.7-rc.2',
-    ...forkPackages, '@deepseek-ai/dsh-workspace@0.1.7-rc.2',
-    '@deepseek-ai/dsh-session-projection@0.1.7-rc.2', '@deepseek-ai/schemastery@3.18.4',
-    ...['agent','ptc-runtime','invariants','llm','scope','system-prompt','user-approval','sandbox','sandbox-policy','session-title','tool-todo','session-persistence'].map(x => `@deepseek-ai/dsh-${x}@0.1.7-rc.2`),
+    '@deepseek-ai/cordis@4.0.5', '@deepseek-ai/dsh-tools@0.2.1-rc.1',
+    ...forkPackages, '@deepseek-ai/dsh-workspace@0.2.1-rc.1',
+    '@deepseek-ai/dsh-session-projection@0.2.1-rc.1', '@deepseek-ai/schemastery@3.18.5',
+    ...['agent','ptc-runtime','llm','scope','system-prompt','user-approval','sandbox','sandbox-policy','session-title','tool-todo','session-persistence'].map(x => `@deepseek-ai/dsh-${x}@0.2.1-rc.1`),
   ], { cwd: root, env, stdio: 'pipe' })
   const hostRequire = createRequire(join(root, 'package.json'))
   const pluginUrl = execFileSync(process.execPath, ['--input-type=module', '-e',
@@ -42,7 +45,7 @@ try {
   for (const name of forkNames) {
     const installed = JSON.parse(readFileSync(hostRequire.resolve(`${name}/package.json`), 'utf8'))
     assert.equal(installed.name, name)
-    assert.ok(manifest.devDependencies[name].endsWith(`-${installed.version}.tgz`), `artifact version for ${name}`)
+    assert.equal(installed.version, manifest.devDependencies[name], `artifact version for ${name}`)
     if (manifest.peerDependencies[name]) assert.equal(installed.version, manifest.peerDependencies[name], `exact peer ${name}`)
     await import(hostRequire.resolve(name))
   }

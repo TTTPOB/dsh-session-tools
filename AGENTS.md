@@ -21,7 +21,7 @@
 
 ## 版本与依赖
 
-- Session core 与 Query peers 精确固定为 `@deepseek-ai/dsh-session 0.1.7-rc.2-fork1`、`@deepseek-ai/dsh-session-query 0.1.7-rc.2-fork4`；Session 与 SQLite `0.1.7-rc.2-fork6` 开发依赖使用 Harness `daily-driver-v0.1.7-rc.2-fork16` 的不可变 tarball。Query 开发依赖须使用已核实的精确 Release URL，lockfile 由 pnpm 生成；不伪造 URL 或宣称旧 fork3 支持 capture。Query 依赖新 Session 的 `SurfaceFoldAccumulator`，不能替换成旧官方 Session；不声明未验证版本的兼容范围。要求公开 `pageSessions`／`pageEvents`／`observeSession`／`captureSession`，缺失时加载明确报错。其他 DSH peers 保持 `0.1.7-rc.2`。
+- Session core 与 Query peers/devDependencies 精确固定为 `0.2.1-rc.1-fork1`；其他 DSH 包固定为 `0.2.1-rc.1`。Cordis 为 `4.0.5`，Loader 为 `1.0.6`，Schemastery 为 `3.18.5`。Query 依赖 Session 的 `SurfaceFoldAccumulator`；要求公开 `pageSessions`／`pageEvents`／`observeSession`／`captureSession`，缺失时加载明确报错。未发布 fork 用本地 tarball 验证，不伪造 Release URL；lockfile 只能由 pnpm 生成。
 - 同时需要 `workspaceRegistry`（来自 `@deepseek-ai/dsh-workspace`）与 query／projection／tool 服务；Cordis 会等待这些服务可用后再注册工具。
 - 大事件分片缓存由插件 effect 拥有；dispose/HMR 清空缓存，进行中的旧调用不得重新填充。
 
@@ -32,7 +32,7 @@
 ## 验证
 
 ```sh
-pnpm --config.verify-deps-before-run=false install --frozen-lockfile
+pnpm --config.verify-deps-before-run=false install --no-frozen-lockfile
 pnpm --config.verify-deps-before-run=false check
 ```
 

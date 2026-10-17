@@ -203,8 +203,32 @@ test('lifecycle IDs, workflow member seq, failed compaction without summary and 
   const unknown = projectTarget(model, 140, detail)
   assert.equal(unknown.records[0].type, 'extension/accepted')
   assert.equal(unknown.records[0].preview.important, 'unknown accepted data')
-  assert.equal(Object.keys(EVENT_PROJECTION_STRATEGIES).length, 59)
+  assert.equal(Object.keys(EVENT_PROJECTION_STRATEGIES).length, 62)
   for (const event of history) assert.ok(model.activityBySeq.has(event.seq))
+})
+
+test('rc.1 jobs, working-directory changes and plugin records preserve bounded facts and raw locators', () => {
+  const events = [
+    { seq: 1, type: 'job/registered', data: { id: 'job-1', kind: 'shell', label: 'build' } },
+    { seq: 2, type: 'job/settled', data: { id: 'job-1', status: 'failed', error: { code: 'BUILD_FAILED' } } },
+    { seq: 3, type: 'working-directory/change', data: { cwd: '/next-project' } },
+    { seq: 4, type: 'plugin:experiment/record', data: { text: '😀'.repeat(20), owner: 'experiment' } },
+  ]
+  const local = associate(events)
+  for (const event of events) {
+    const projected = projectTarget(local, event.seq, detail)
+    const record = projected.records[0]
+    assert.equal(record.type, event.type)
+    assert.equal(record.read_seq, event.seq)
+    assert.deepEqual(projected.source_seqs, [event.seq])
+    assert.deepEqual(record.preview, event.data)
+    assert.equal(record.strategy, event.type.startsWith('plugin:') ? 'plugin-record' : 'bounded-fact')
+  }
+  assert.equal(projectTarget(local, 2, compact).records[0].error_code, 'BUILD_FAILED')
+  const limited = projectTarget(local, 4, { ...detail, budget: { ...detail.budget, maxStringChars: 5 } })
+  assert.equal(limited.records[0].preview.text, '😀'.repeat(5))
+  assert.equal(limited.records[0].type, 'plugin:experiment/record')
+  assert.equal(limited.truncated, true)
 })
 
 test('bounded previews never serialize original huge objects and final UTF-8 budget preserves errors and seqs', () => {

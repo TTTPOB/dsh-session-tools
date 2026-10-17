@@ -1,6 +1,6 @@
 {
   "name": "dsh-session-tools",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Indexed, project-scoped DSH session browsing tools",
   "type": "module",
   "main": "dist/index.js",
@@ -16,14 +16,14 @@
     "check": "pnpm build && pnpm test"
   },
   "peerDependencies": {
-    "@deepseek-ai/cordis": "4.0.4",
-    "@deepseek-ai/dsh-session": "0.1.7-rc.2-fork1",
-    "@deepseek-ai/dsh-session-projection": "0.1.7-rc.2",
-    "@deepseek-ai/dsh-session-projection-cache": "0.1.7-rc.2",
-    "@deepseek-ai/dsh-session-query": "0.1.7-rc.2-fork4",
-    "@deepseek-ai/dsh-tools": "0.1.7-rc.2",
-    "@deepseek-ai/dsh-workspace": "0.1.7-rc.2",
-    "@deepseek-ai/schemastery": "3.18.4"
+    "@deepseek-ai/cordis": "4.0.5",
+    "@deepseek-ai/dsh-session": "0.2.1-rc.1-fork1",
+    "@deepseek-ai/dsh-session-projection": "0.2.1-rc.1",
+    "@deepseek-ai/dsh-session-projection-cache": "0.2.1-rc.1",
+    "@deepseek-ai/dsh-session-query": "0.2.1-rc.1-fork1",
+    "@deepseek-ai/dsh-tools": "0.2.1-rc.1",
+    "@deepseek-ai/dsh-workspace": "0.2.1-rc.1",
+    "@deepseek-ai/schemastery": "3.18.5"
   },
   "peerDependenciesMeta": {
     "@deepseek-ai/dsh-session-projection-cache": {
@@ -31,23 +31,23 @@
     }
   },
   "devDependencies": {
-    "@deepseek-ai/cordis": "4.0.4",
+    "@deepseek-ai/cordis": "4.0.5",
     "@deepseek-ai/cordis-plugin-include": "1.0.9",
-    "@deepseek-ai/cordis-plugin-loader": "1.0.5",
-    "@deepseek-ai/dsh-agent-loop": "0.1.7-rc.2",
-    "@deepseek-ai/dsh-llm": "0.1.7-rc.2",
-    "@deepseek-ai/dsh-session": "https://github.com/TTTPOB/deepseek-harness/releases/download/daily-driver-v0.1.7-rc.2-fork16/deepseek-ai-dsh-session-0.1.7-rc.2-fork1.tgz",
-    "@deepseek-ai/dsh-session-persistence-jsonl": "0.1.7-rc.2",
-    "@deepseek-ai/dsh-session-projection": "0.1.7-rc.2",
-    "@deepseek-ai/dsh-session-projection-cache": "0.1.7-rc.2",
-    "@deepseek-ai/dsh-session-query": "https://github.com/TTTPOB/deepseek-harness/releases/download/daily-driver-v0.1.7-rc.2-fork17/deepseek-ai-dsh-session-query-0.1.7-rc.2-fork4.tgz",
-    "@deepseek-ai/dsh-session-query-sqlite": "https://github.com/TTTPOB/deepseek-harness/releases/download/daily-driver-v0.1.7-rc.2-fork16/deepseek-ai-dsh-session-query-sqlite-0.1.7-rc.2-fork6.tgz",
-    "@deepseek-ai/dsh-system-prompt": "0.1.7-rc.2",
-    "@deepseek-ai/dsh-tools": "0.1.7-rc.2",
-    "@deepseek-ai/dsh-workspace": "0.1.7-rc.2",
-    "@deepseek-ai/schemastery": "3.18.4",
+    "@deepseek-ai/cordis-plugin-loader": "1.0.6",
+    "@deepseek-ai/dsh-agent-loop": "0.2.1-rc.1",
+    "@deepseek-ai/dsh-llm": "0.2.1-rc.1",
+    "@deepseek-ai/dsh-session": "0.2.1-rc.1-fork1",
+    "@deepseek-ai/dsh-session-persistence-jsonl": "0.2.1-rc.1",
+    "@deepseek-ai/dsh-session-projection": "0.2.1-rc.1",
+    "@deepseek-ai/dsh-session-projection-cache": "0.2.1-rc.1",
+    "@deepseek-ai/dsh-session-query": "0.2.1-rc.1-fork1",
+    "@deepseek-ai/dsh-session-query-sqlite": "0.2.1-rc.1",
+    "@deepseek-ai/dsh-system-prompt": "0.2.1-rc.1",
+    "@deepseek-ai/dsh-tools": "0.2.1-rc.1",
+    "@deepseek-ai/dsh-workspace": "0.2.1-rc.1",
+    "@deepseek-ai/schemastery": "3.18.5",
     "@types/node": "^26.6.3",
-    "typescript": "^5.9.3"
+    "typescript": "^6.0.3"
   },
   "license": "MIT",
   "exports": {
