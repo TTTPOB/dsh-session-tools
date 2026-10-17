@@ -9,17 +9,24 @@ import { fileURLToPath } from 'node:url'
 const source = dirname(dirname(fileURLToPath(import.meta.url)))
 const manifest = JSON.parse(readFileSync(join(source, 'package.json'), 'utf8'))
 const forkNames = ['@deepseek-ai/dsh-session', '@deepseek-ai/dsh-session-query']
+const releaseDependencies = JSON.parse(readFileSync(join(source, '.github/release-dependencies.json'), 'utf8')).dependencies
+const overrides = Object.fromEntries(Object.entries(releaseDependencies).map(([name, item]) => {
+  assert.ok(item.source, `Missing verified Release source for ${name}`)
+  return [name, item.source]
+}))
 const forkPackages = forkNames.map((name, index) => {
   const tarball = process.env[index === 0 ? 'DSH_SESSION_TARBALL' : 'DSH_QUERY_TARBALL']
   if (tarball) {
     assert.ok(tarball.startsWith('/') && tarball.endsWith('.tgz'), `absolute local tarball for ${name}`)
+    overrides[name] = `file:${tarball}`
     return `${name}@file:${tarball}`
   }
-  return `${name}@${manifest.devDependencies[name]}`
+  return `${name}@${overrides[name]}`
 })
 const env = { ...process.env, npm_config_verify_deps_before_run: 'false' }
 const root = mkdtempSync(join(tmpdir(), 'dsh-session-tools-pack-'))
 try {
+  writeFileSync(join(root, 'pnpm-workspace.yaml'), JSON.stringify({ autoInstallPeers: false, overrides, allowBuilds: { koffi: false } }))
   writeFileSync(join(root, 'package.json'), JSON.stringify({
     name: 'session-tools-smoke', private: true, type: 'module',
     devDependencies: { typescript: manifest.devDependencies.typescript, '@types/node': manifest.devDependencies['@types/node'] },
