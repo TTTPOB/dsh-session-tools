@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+env:
+  NODE_OPTIONS: --max-old-space-size=4096
+  npm_config_verify_deps_before_run: 'false'
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.28.5
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Install pinned build dependencies
+        run: pnpm --config.verify-deps-before-run=false install --frozen-lockfile
+      - name: Build and test
+        run: pnpm --config.verify-deps-before-run=false check
+      - name: Verify packaged entry and create asset
+        run: |
+          node tests/pack-smoke.mjs
+          pnpm --config.verify-deps-before-run=false pack --pack-destination dist/release
