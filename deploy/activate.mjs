@@ -96,11 +96,8 @@ try {
         if (expected === undefined) fail(`${profile}: Host does not provide shared peer ${peer}`)
         const actual = ctx.pluginPackages.packageOf(peer, entryUrl)
         if (actual === undefined) fail(`${profile}: profile resolver cannot locate peer ${peer}`)
-        if (peer !== '@deepseek-ai/schemastery' && realpathSync(actual.dir) !== realpathSync(expected.packageDir)) {
+        if (realpathSync(actual.dir) !== realpathSync(expected.packageDir)) {
           fail(`${profile}: ${peer} resolves to a different copy than Host`)
-        }
-        if (peer === '@deepseek-ai/schemastery' && actual.version !== expected.version) {
-          fail(`${profile}: Schemastery version differs from Host`)
         }
       }
       let module

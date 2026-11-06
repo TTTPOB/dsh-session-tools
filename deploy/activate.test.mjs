@@ -2,7 +2,8 @@ import { test } from 'node:test'
 import { strict as assert } from 'node:assert'
 import { existsSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, readdirSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
+import { createRequire } from 'node:module'
 import { execFileSync, spawnSync } from 'node:child_process'
 
 const script = resolve(import.meta.dirname, 'activate.mjs')
@@ -26,9 +27,13 @@ const fixture = () => {
   put(tarball, '')
   put(join(plugin, 'package.json'), JSON.stringify({
     name: 'dsh-session-tools', version: '0.1.3', type: 'module', main: 'dist/index.js',
-    peerDependencies: { '@deepseek-ai/cordis': '*', '@deepseek-ai/dsh-tools': '*', '@deepseek-ai/schemastery': '*' },
+    peerDependencies: { '@deepseek-ai/cordis': '*', '@deepseek-ai/dsh-tools': '*' },
+    dependencies: { '@deepseek-ai/schemastery': '*' },
   }))
   put(join(plugin, 'dist/index.js'), "import { defineTool } from '@deepseek-ai/dsh-tools'; import Schema from '@deepseek-ai/schemastery'; export const name = 'dsh-session-tools'; export const apply = () => {}; export const Config = Schema.object({ pageSize: Schema.number().min(1).default(30), maxPageSize: Schema.number().default(100) }); export const sharedTool = defineTool;\n")
+  const schemaDir = dirname(createRequire(import.meta.url).resolve('@deepseek-ai/schemastery/package.json'))
+  mkdirSync(join(plugin, 'node_modules/@deepseek-ai'), { recursive: true })
+  symlinkSync(schemaDir, join(plugin, 'node_modules/@deepseek-ai/schemastery'), 'dir')
   put(join(home, 'cordis.patch.yml'), '- insert:\n    - id: example\n      name: example\n')
   for (const name of profiles) {
     const dir = join(home, 'profiles', name)
