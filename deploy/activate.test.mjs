@@ -294,7 +294,7 @@ try {
  const tools = new Map();
  ctx.provide('tools', { register(tool) { tools.set(tool.name, tool); return () => tools.delete(tool.name) } });
  ctx.provide('workspaceRegistry', { archivedSessionIds: [] });
- ctx.provide('sessionProjections', { stateOf: () => ({ lastStepStartSeq: 3 }) });
+ ctx.provide('agents', { turnBoundaryOf: () => ({ lastStepStartSeq: 3 }) });
  let calls = 0;
  ctx.provide('sessionQuery', { pageSessions: async () => { calls++; return { items: [] } }, pageEvents: async () => ({ items: [] }), observeSession: async () => { throw new Error('session_list must not observe logs') }, captureSession: async () => { throw new Error('session_list must not capture logs') } });
  const plugin = await import(pathToFileURL(${JSON.stringify(join(f.home, 'profiles/web/node_modules/dsh-session-tools/dist/index.js'))}));

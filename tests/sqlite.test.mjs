@@ -6,7 +6,8 @@ import { tmpdir } from 'node:os'
 import { Context } from '@deepseek-ai/cordis'
 import SessionStore, { SessionId } from '@deepseek-ai/dsh-session'
 import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
-import { turnBoundaryProjectionDefinition } from '@deepseek-ai/dsh-agent-loop'
+import AgentRegistry from '@deepseek-ai/dsh-agent'
+import * as NativeToolExecutor from '@deepseek-ai/dsh-tool-executor-native'
 import * as JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
 import SqliteSessionQueryEngine from '@deepseek-ai/dsh-session-query-sqlite'
 import ToolRuntime from '@deepseek-ai/dsh-tools'
@@ -20,9 +21,10 @@ test('actual SQLite index honors project/all, cursor and native tool results', a
   try {
     await ctx.plugin(SessionStore)
     await ctx.plugin(SessionProjectionRegistry)
-    ctx.sessionProjections.register(turnBoundaryProjectionDefinition)
+    await ctx.plugin(AgentRegistry)
     await ctx.plugin(SystemPrompt)
     await ctx.plugin(ToolRuntime)
+    await ctx.plugin(NativeToolExecutor)
     await ctx.plugin(JsonlSessionPersistence, { root, compression: 'none' })
     await ctx.plugin(SqliteSessionQueryEngine, { path: join(root, 'index.db') })
     const archives = { archivedSessionIds: [] }
@@ -37,7 +39,7 @@ test('actual SQLite index honors project/all, cursor and native tool results', a
     caller.append('turn/start', { turn: 1 }); caller.append('step/start', { turn: 1, step: 1 })
     let serial = 0
     const execute = async (name, arguments_) => {
-      const result = await ctx.tools.execute({ name, arguments: arguments_, callId: ToolCallId(`sqlite-${++serial}`), signal: new AbortController().signal, agent: { id: caller.id, session: caller } })
+      const result = (await ctx.tools.execute({ calls: [{ type: 'tool-call', name, arguments: JSON.stringify(arguments_), id: ToolCallId(`sqlite-${++serial}`) }], signal: new AbortController().signal, agent: { id: caller.id, session: caller } })).results[0].result
       assert.equal(result.isError, false, JSON.stringify(result))
       assert.ok(result.value && typeof result.value === 'object')
       assert.equal(JSON.parse(result.content.find(x => x.type === 'text').text).has_more, result.value.has_more)
@@ -110,7 +112,7 @@ test('actual SQLite index honors project/all, cursor and native tool results', a
     const livePage = await execute('session_search', { query: 'needle', limit: 3 })
     assert.equal(providerCalls, 1); assert.equal(livePage.items.length, 3)
     assert.equal(livePage.has_more, true)
-    const stale = await ctx.tools.execute({ name: 'session_search', arguments: { query: 'needle', limit: 3, cursor: livePage.next_cursor }, callId: ToolCallId(`sqlite-${++serial}`), signal: new AbortController().signal, agent: { id: caller.id, session: caller } })
+    const stale = (await ctx.tools.execute({ calls: [{ type: 'tool-call', name: 'session_search', arguments: JSON.stringify({ query: 'needle', limit: 3, cursor: livePage.next_cursor }), id: ToolCallId(`sqlite-${++serial}`) }], signal: new AbortController().signal, agent: { id: caller.id, session: caller } })).results[0].result
     assert.equal(stale.isError, true); assert.match(JSON.stringify(stale), /stale|cursor/i)
     ctx.sessionQuery.searchSessions = originalSearch
     for (const text of ['indexed needle extra first', 'indexed needle extra second']) {
@@ -151,7 +153,7 @@ test('actual SQLite index honors project/all, cursor and native tool results', a
     assert.equal(surfaceNext.has_more, false)
     assert.deepEqual(new Set([...surfaceFirst.items, ...surfaceNext.items].map(item => item.seq)), new Set([shadowed.seq, logOnly.seq]))
     assert.deepEqual((await execute('session_event_search', { session_id: 'one', query: 'unindexedprobe' })).items, [])
-    const invalidSurface = await ctx.tools.execute({ name: 'session_event_search', arguments: { session_id: 'one', query: 'surfaceprobe', surfaces: ['invalid'] }, callId: ToolCallId(`sqlite-${++serial}`), signal: new AbortController().signal, agent: { id: caller.id, session: caller } })
+    const invalidSurface = (await ctx.tools.execute({ calls: [{ type: 'tool-call', name: 'session_event_search', arguments: JSON.stringify({ session_id: 'one', query: 'surfaceprobe', surfaces: ['invalid'] }), id: ToolCallId(`sqlite-${++serial}`) }], signal: new AbortController().signal, agent: { id: caller.id, session: caller } })).results[0].result
     assert.equal(invalidSurface.isError, true)
 
     const prior = caller.append('user/message', createUserMessage({ content: [{ type: 'text', text: 'ceilingprobe prior' }], source: { kind: 'user' } }), { surfaceOp: 'append' })

@@ -23,7 +23,6 @@ test('real Cordis Loader mounts built ESM through cordis.yml then disposes tools
     ctx.baseUrl = pathToFileURL(root).href + '/'
     ctx.provide('tools', { register(definition) { assert.equal(tools.has(definition.name), false, 'tool registration must be unique'); tools.set(definition.name, definition); return () => tools.delete(definition.name) } })
     ctx.provide('workspaceRegistry', { archivedSessionIds: ['archived'] })
-    ctx.provide('sessionProjections', { stateOf: () => ({ lastStepStartSeq: 3 }) })
     ctx.provide('sessionQuery', {
       captureSession: async () => { throw new Error('History tools must not capture the Surface') },
       pageSessions: async () => ({ items: [] }),
@@ -39,6 +38,9 @@ test('real Cordis Loader mounts built ESM through cordis.yml then disposes tools
       return plugin
     } }
     await ctx.loader.create({ name: 'cordis:include', config: { path: pathToFileURL(configPath).href } })
+    await ctx.loader.await()
+    assert.equal(tools.size, 0, 'tools must wait for the agent registry')
+    ctx.provide('agents', { turnBoundaryOf: () => ({ lastStepStartSeq: 3 }) })
     await ctx.loader.await()
     assert.equal(typeof tools.get('session_search').execute, 'function')
     const listed = await tools.get('session_list').execute({}, { signal: new AbortController().signal, agent: { session: { id: 'caller', header: { cwd: '/one' } } } })
@@ -58,7 +60,7 @@ test('Loader + actual SQLite executes compact/target/activity/Raw contracts and 
   const root = await mkdtemp(join(tmpdir(), 'session-tools-loader-sqlite-'))
   const ctx = new Context()
   try {
-    const packages = ['session', 'session-projection', 'system-prompt', 'tools', 'session-persistence-jsonl', 'session-query-sqlite']
+    const packages = ['session', 'session-projection', 'system-prompt', 'tools', 'tool-executor-native', 'agent', 'session-persistence-jsonl', 'session-query-sqlite']
     const modules = new Map(await Promise.all(packages.map(async name => [name, await import(`@deepseek-ai/dsh-${name}`)])))
     modules.set('dsh-session-tools', plugin)
     const configPath = join(root, 'cordis.yml')
@@ -77,7 +79,7 @@ test('Loader + actual SQLite executes compact/target/activity/Raw contracts and 
     const session = ctx.sessions.create(SessionId('reading-history'), { meta: { createdAt: 2, cwd: '/one' } })
     const history = appendReadingHistory(session)
     let serial = 0
-    const execute = async (name, args, signal = new AbortController().signal) => ctx.tools.execute({ name, arguments: { session_id: session.id, ...args }, callId: ToolCallId(`loader-reading-${++serial}`), signal, agent: { id: caller.id, session: caller } })
+    const execute = async (name, args, signal = new AbortController().signal) => (await ctx.tools.execute({ calls: [{ type: 'tool-call', name, arguments: JSON.stringify({ session_id: session.id, ...args }), id: ToolCallId(`loader-reading-${++serial}`) }], signal, agent: { id: caller.id, session: caller } })).results[0].result
     const value = async (name, args) => {
       const result = await execute(name, args)
       assert.equal(result.isError, false, JSON.stringify(result))

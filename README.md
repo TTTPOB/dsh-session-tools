@@ -1,8 +1,8 @@
 # dsh-session-tools
 
-Independent DSH 0.2.1-rc.1 Cordis consumer for indexed session search and exact session browsing. This package does **not** contribute a bundle or replace a provider. It reads sessions through `ctx.sessionQuery`, optionally reads zero-I/O title hints from `ctx.sessionProjectionCache`, and obtains the current-step boundary from `ctx.sessionProjections`; it never opens or decompresses session files. Built-in `session_search`, `session_event_search`, `session_event_read`, `session_trace`, and `session_event_trace` may already be registered by a profile: disable the built-in consumer before enabling these replacements. The tools here replace the old `agent_session_search`, `agent_session_list`, and `agent_session_read` entries from `dsh-session-search-pro`; do not register both consumer sets simultaneously.
+Independent DSH 0.2.2-rc.1 Cordis consumer for indexed session search and exact session browsing. This package does **not** contribute a bundle or replace a provider. It reads sessions through `ctx.sessionQuery`, optionally reads zero-I/O title hints from `ctx.sessionProjectionCache`, and obtains the current-step boundary from `ctx.agents.turnBoundaryOf`; it never opens or decompresses session files. Built-in `session_search`, `session_event_search`, `session_event_read`, `session_trace`, and `session_event_trace` may already be registered by a profile: disable the entire `@deepseek-ai/dsh-tool-session-query` consumer before enabling these replacements. Its five upstream tools have no pagination and must not be registered alongside this plugin. The tools here replace the old `agent_session_search`, `agent_session_list`, and `agent_session_read` entries from `dsh-session-search-pro`; do not register both consumer sets simultaneously.
 
-The plugin requires `workspaceRegistry` from `@deepseek-ai/dsh-workspace` alongside its query, projection, and tool services; Cordis waits for these services before registering the tools.
+The plugin requires `workspaceRegistry` from `@deepseek-ai/dsh-workspace` alongside its query, agent registry, and tool services; Cordis waits for these services before registering the tools.
 
 ## Scope and search
 
@@ -56,7 +56,7 @@ Raw 缓存仅保存同 provider/session/原 seq 的已准备 code points 与 cap
 
 ## 分页快照与追踪
 
-本包的 Session core 与 Query peers 分别要求 `@deepseek-ai/dsh-session 0.2.1-rc.1-fork1`、`@deepseek-ai/dsh-session-query 0.2.1-rc.1-fork1`。Query 依赖新 Session 的 `SurfaceFoldAccumulator`，不能替换成旧官方 Session；不声明未验证版本的兼容范围。运行时要求公开 `pageSessions`、`pageEvents`、`observeSession`、`captureSession`，缺失时加载明确失败。其他 DSH peers 固定为 0.2.1-rc.1，Cordis 为 4.0.5，Schemastery 为 3.18.5。`session_list` 使用不可变 metadata snapshot cursor，续页保持 scope/limit；新 session 不漂移页。snapshot 内标题来源删除时保留 NOT_FOUND 并提示不带 cursor 重启，不以默认标题掩盖失败。provider 重载、snapshot 超时或淘汰使 cursor 失效。
+本包的 Session core 与 Query peers 分别要求 `@deepseek-ai/dsh-session 0.2.2-rc.1`、`@deepseek-ai/dsh-session-query 0.2.2-rc.1`。Query fork 依赖同基线 Session 的 `SurfaceFoldAccumulator`；仅官方 Query 缺少所需扩展，不声明未验证版本的兼容范围。运行时要求公开 `pageSessions`、`pageEvents`、`observeSession`、`captureSession`，缺失时加载明确失败。其他 DSH peers 固定为 0.2.2-rc.1，Cordis 为 4.1.0，Schemastery 为 3.18.5。`session_list` 使用不可变 metadata snapshot cursor，续页保持 scope/limit；新 session 不漂移页。snapshot 内标题来源删除时保留 NOT_FOUND 并提示不带 cursor 重启，不以默认标题掩盖失败。provider 重载、snapshot 超时或淘汰使 cursor 失效。
 
 两个 trace 工具返回公开服务提供的完整关系，预算不足报错，不截断 links。`session_trace` 在首个隐藏父节点停止 ancestry，并以 scope_limited 标记隐藏关系；先过滤可见节点再对去重后的标题使用与 List/Search 相同的 helper。cache hint 保留 title_cached:true。
 
@@ -82,7 +82,9 @@ reader 可传入 `options.evidence.pageSourceSeqs`、`coverageComplete`、`incom
 
 ## Development
 
-Use Node 22.19+ or 24+ and pnpm. Install the exact Session/Query forks before running `pnpm --config.verify-deps-before-run=false check`. Generate the lockfile with `pnpm --config.verify-deps-before-run=false install --no-frozen-lockfile`; subsequent installs can use `--frozen-lockfile`. For unpublished forks, use local pnpm overrides pointing to their tarballs. `tests/pack-smoke.mjs` accepts absolute `DSH_SESSION_TARBALL` and `DSH_QUERY_TARBALL` paths for isolated consumer verification; without those variables it installs the declared exact versions. Cordis/DSH service peers use the Host instances through the public profile resolver; Schemastery must match the Host version and pass Host Config validation.
+All DSH manifests pin the official `0.2.2-rc.1` version. Runtime and full build verification additionally require the matching capture/pagination-capable Session/Query fork via pnpm overrides; official npm Query alone is insufficient. The fork extensions are not implemented again here. The old fork overrides have been removed; `.github/release-dependencies.json` leaves new fork sources unset until real assets are published. Native execution in a consuming profile requires `@deepseek-ai/dsh-tool-executor-native`; PTC requires its executor and runtime, not `tools.mode`.
+
+Use Node 24.9+ and pnpm. Install the exact Session/Query forks before running `pnpm --config.verify-deps-before-run=false check`. Generate the lockfile with `pnpm --config.verify-deps-before-run=false install --no-frozen-lockfile`; subsequent installs can use `--frozen-lockfile`. For unpublished forks, use local pnpm overrides pointing to their tarballs. `tests/pack-smoke.mjs` accepts absolute `DSH_SESSION_TARBALL` and `DSH_QUERY_TARBALL` paths for isolated consumer verification; without local tarballs it requires verified new fork Release sources. Cordis/DSH service peers use the Host instances through the public profile resolver; Schemastery must match the Host version and pass Host Config validation.
 
 Installation, pinned Release sources and artifact verification are documented in [dsh-config installation](<../dsh-config/docs/install.md>) and [testing](<../dsh-config/docs/testing.md>).
 

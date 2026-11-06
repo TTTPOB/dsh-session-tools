@@ -4,7 +4,7 @@
 
 ## 数据访问契约
 
-- **绝不打开或解压 session 文件。** 只经 `ctx.sessionQuery` 读取，可选 `ctx.sessionProjectionCache`（零 I/O 标题提示）与 `ctx.sessionProjections`（当前 step 边界）。
+- **绝不打开或解压 session 文件。** 只经 `ctx.sessionQuery` 读取，可选 `ctx.sessionProjectionCache` 提供零 I/O 标题提示，必需的 `ctx.agents.turnBoundaryOf` 提供当前 step 边界。
 - 搜索只调用 `searchSessions` 与 `searchEvents`。**没有 scan fallback，没有 `maxScan`，没有文本搜索。**
 - 索引被禁用、不支持或失败时，抛出 provider 的原始错误类别，并明确说明**没有扫描任何日志**。向用户报告；**不得以扫日志兜底**。
 - 不重试失败的 provider 请求。
@@ -21,8 +21,8 @@
 
 ## 版本与依赖
 
-- Session core 与 Query peers/devDependencies 精确固定为 `0.2.1-rc.1-fork1`；其他 DSH 包固定为 `0.2.1-rc.1`。Cordis 为 `4.0.5`，Loader 为 `1.0.6`，Schemastery 为 `3.18.5`。Query 依赖 Session 的 `SurfaceFoldAccumulator`；要求公开 `pageSessions`／`pageEvents`／`observeSession`／`captureSession`，缺失时加载明确报错。未发布 fork 用本地 tarball 验证，不伪造 Release URL；lockfile 只能由 pnpm 生成。
-- 同时需要 `workspaceRegistry`（来自 `@deepseek-ai/dsh-workspace`）与 query／projection／tool 服务；Cordis 会等待这些服务可用后再注册工具。
+- Session core 与 Query peers/devDependencies 精确固定为 `0.2.2-rc.1`；完整构建／验收要求通过 pnpm overrides 安装同基线分页／capture fork；其他 DSH 包固定为 `0.2.2-rc.1`。Cordis 为 `4.1.0`，Loader 为 `1.1.0`，Schemastery 为 `3.18.5`。Query 依赖 Session 的 `SurfaceFoldAccumulator`；要求公开 `pageSessions`／`pageEvents`／`observeSession`／`captureSession`，缺失时加载明确报错。未发布 fork 用本地 tarball 验证，不伪造 Release URL；lockfile 只能由 pnpm 生成。
+- 同时需要 `workspaceRegistry`（来自 `@deepseek-ai/dsh-workspace`）与 query／agents／tool 服务；Cordis 会等待这些服务可用后再注册工具。
 - 大事件分片缓存由插件 effect 拥有；dispose/HMR 清空缓存，进行中的旧调用不得重新填充。
 
 ## ADR 状态

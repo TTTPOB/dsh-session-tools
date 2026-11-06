@@ -1,5 +1,5 @@
 import type { Context } from '@deepseek-ai/cordis'
-import type {} from '@deepseek-ai/dsh-session-projection'
+import type {} from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-session-projection-cache'
 import type {} from '@deepseek-ai/dsh-workspace'
 import Schema from '@deepseek-ai/schemastery'
@@ -14,7 +14,7 @@ import { readTools } from './read-tools.js'
 /** Loader-visible plugin identity. */
 export const name = 'dsh-session-tools'
 /** Services required before tools are registered. */
-export const inject = ['tools', 'sessionQuery', 'sessionProjections', 'workspaceRegistry']
+export const inject = ['tools', 'sessionQuery', 'agents', 'workspaceRegistry']
 /** Limits applied to native output, indexed searches and prepared event fragments. */
 export interface Config {
   pageSize: number; maxPageSize: number; previewChars: number; outputBytes: number
@@ -167,7 +167,7 @@ export function apply(ctx: Context, config: Config): void {
       const query = args.query.trim(); if (!query) throw new Error('query must not be empty')
       const requested = size(args.limit)
       // The active step is never searchable; prior steps in the same session remain available.
-      const boundary = sessionId === access.id ? ctx.sessionProjections.stateOf(exec.agent!.session, 'turnBoundary')?.lastStepStartSeq : undefined
+      const boundary = sessionId === access.id ? ctx.agents.turnBoundaryOf(exec.agent!.session).lastStepStartSeq : undefined
       if (sessionId === access.id && boundary == null) throw new Error('Current-session search requires a step/start event')
       if (args.surfaces?.length === 0) throw new Error('surfaces must not be empty')
       const filters: SessionEventMetadataFilter[] = boundary == null ? [] : [{ kind: 'seq', to: boundary - 1 }]

@@ -6,7 +6,7 @@ const config = { pageSize: 30, maxPageSize: 100, previewChars: 240, outputBytes:
 function setup(query, options = {}) {
   const definitions = new Map()
   let cleanup
-  const ctx = { get(name) { return this[name] }, sessionQuery: query, workspaceRegistry: { archivedSessionIds: [] }, sessionProjections: { stateOf: () => ({ lastStepStartSeq: 3 }) }, tools: { register(tool) { assert.equal(definitions.has(tool.name), false); definitions.set(tool.name, tool); return () => definitions.delete(tool.name) } }, effect(fn) { cleanup = fn() } }
+  const ctx = { get(name) { return this[name] }, sessionQuery: query, workspaceRegistry: { archivedSessionIds: [] }, agents: { turnBoundaryOf: () => ({ lastStepStartSeq: 3 }) }, tools: { register(tool) { assert.equal(definitions.has(tool.name), false); definitions.set(tool.name, tool); return () => definitions.delete(tool.name) } }, effect(fn) { cleanup = fn() } }
   apply(ctx, { ...config, ...options })
   const controller = new AbortController()
   const exec = { signal: controller.signal, agent: { session: { id: 'self', header: { cwd: '/one' } } } }
@@ -380,7 +380,7 @@ test('own-session cursor across a new step rejects stale provider cursor', async
   assert.equal(first.next_cursor, 'opaque')
   // A new step changes the formal projection and invalidates the old provider query fingerprint.
   boundary = 9
-  f.ctx.sessionProjections.stateOf = () => ({ lastStepStartSeq: boundary })
+  f.ctx.agents.turnBoundaryOf = () => ({ lastStepStartSeq: boundary })
   await assert.rejects(original.execute({ session_id: 'self', query: 'needle', limit: 1, cursor: first.next_cursor }, f.exec), e => e.code === 'SESSION_QUERY_STALE_CURSOR' && /no logs were scanned/i.test(e.message))
 })
 
@@ -511,4 +511,21 @@ test('lifecycle endpoints without intermediate coverage stay incomplete under su
   const target = setup(provider({ listEvents: async () => [{ seq: 0, type: 'user/message', data: { content: [{ type: 'text', text: '😀'.repeat(2000) }] } }] }), { readProcessingBytes: 1024 })
   await assert.rejects(run(target, 'session_event_read', { session_id: 'a', seq: 0 }), /processing_bytes_exhausted/)
   assert.equal((await run(target, 'session_event_read', { session_id: 'a', seq: 0, view: 'raw' })).event.seq, 0)
+})
+test('own-session search reads the owning Agent boundary and rejects an unopened step', async () => {
+  let searched = 0
+  const f = setup(provider({ searchEvents: async request => {
+    searched++
+    assert.deepEqual(request.filters, [{ kind: 'seq', to: 10 }])
+    return { session: header('self'), items: [] }
+  } }))
+  f.ctx.agents.turnBoundaryOf = session => {
+    assert.equal(session, f.exec.agent.session)
+    return { lastStepStartSeq: 11 }
+  }
+  await run(f, 'session_event_search', { session_id: 'self', query: 'needle' })
+  assert.equal(searched, 1)
+  f.ctx.agents.turnBoundaryOf = () => ({ lastStepStartSeq: null })
+  await assert.rejects(run(f, 'session_event_search', { session_id: 'self', query: 'needle' }), /step\/start/)
+  assert.equal(searched, 1)
 })
