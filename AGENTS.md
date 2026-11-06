@@ -21,7 +21,7 @@
 
 ## 版本与依赖
 
-- Session core 与 Query peers/devDependencies 精确固定为 `0.2.2-rc.1`；完整构建／验收要求通过 pnpm overrides 安装同基线分页／capture fork；其他 DSH 包固定为 `0.2.2-rc.1`。Cordis 为 `4.1.0`，Loader 为 `1.1.0`，Schemastery 为 `3.18.5`。Query 依赖 Session 的 `SurfaceFoldAccumulator`；要求公开 `pageSessions`／`pageEvents`／`observeSession`／`captureSession`，缺失时加载明确报错。未发布 fork 用本地 tarball 验证，不伪造 Release URL；lockfile 只能由 pnpm 生成。
+- Session core 与 Query peers/devDependencies 精确固定为 `0.2.2-rc.1`；完整构建／验收要求通过 pnpm overrides 安装同基线分页／capture fork；其他 DSH 包固定为 `0.2.2-rc.1`。Cordis 为 `4.1.0`，Loader 为 `1.1.0`，Schemastery 为 `3.19.0`。Query 依赖 Session 的 `SurfaceFoldAccumulator`；要求公开 `pageSessions`／`pageEvents`／`observeSession`／`captureSession`，缺失时加载明确报错。未发布 fork 用本地 tarball 验证，不伪造 Release URL；lockfile 只能由 pnpm 生成。
 - 同时需要 `workspaceRegistry`（来自 `@deepseek-ai/dsh-workspace`）与 query／agents／tool 服务；Cordis 会等待这些服务可用后再注册工具。
 - 大事件分片缓存由插件 effect 拥有；dispose/HMR 清空缓存，进行中的旧调用不得重新填充。
 
