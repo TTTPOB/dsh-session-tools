@@ -45,7 +45,9 @@ export function fitsOrThrow<T extends object>(value: T, budget: number): T {
 export function searchError(error: unknown): never {
   if (error instanceof Error) {
     // Preserve the provider's error identity and code while adding actionable guidance.
-    error.message += ' (Indexed search failed; no logs were scanned. Report this to the user; do not scan logs as a workaround. FTS matches tokens, not arbitrary substrings.)'
+    error.message += 'code' in error && error.code === 'SESSION_QUERY_INDEX_WARMING'
+      ? ' (The search index is warming up. Retry later; no logs were scanned.)'
+      : ' (Indexed search failed; no logs were scanned. Report this to the user; do not scan logs as a workaround. FTS matches tokens, not arbitrary substrings.)'
   }
   throw error
 }

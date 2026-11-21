@@ -140,6 +140,30 @@ test('disabled search does not call listing or fall back, retains code', async (
   await assert.rejects(run(f, 'session_search', { query: 'hello' }), e => e.code === error.code && /no logs were scanned/i.test(e.message))
   assert.equal(listed, false)
 })
+test('index warmup tells both search callers to retry later without retrying or scanning', async () => {
+  for (const [tool, method, args] of [
+    ['session_search', 'searchSessions', { query: 'hello' }],
+    ['session_event_search', 'searchEvents', { session_id: 'self', query: 'hello' }],
+  ]) {
+    let calls = 0
+    const fallback = () => assert.fail('search must not fall back to reading logs')
+    const code = 'SESSION_QUERY_INDEX_WARMING'
+    const error = Object.assign(new Error('Index not ready'), { code })
+    const f = setup(provider({
+      [method]: async () => { calls++; throw error },
+      listSessions: fallback, listEvents: fallback, filterEvents: fallback, observeSession: fallback,
+    }))
+    await assert.rejects(run(f, tool, args), actual => {
+      assert.equal(actual, error)
+      assert.equal(actual.code, code)
+      assert.match(actual.message, /warming up/i)
+      assert.match(actual.message, /retry later/i)
+      assert.match(actual.message, /no logs were scanned/i)
+      return true
+    })
+    assert.equal(calls, 1)
+  }
+})
 test('event list includes structural events, EOF and explicit type filters', async () => {
   const f = setup(provider({ listEvents: async () => [0, 1, 2].map(seq => ({ sessionId: 'a', seq, type: seq === 1 ? 'user/message' : 'turn/start', time: 0, surface: 'log-only' })) }))
   assert.deepEqual((await run(f, 'session_event_list', { session_id: 'a', view: 'metadata' })).items.map(x => x.seq), [0, 1, 2])
