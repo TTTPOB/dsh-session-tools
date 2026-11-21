@@ -46,7 +46,7 @@ export function searchError(error: unknown): never {
   if (error instanceof Error) {
     // Preserve the provider's error identity and code while adding actionable guidance.
     error.message += 'code' in error && error.code === 'SESSION_QUERY_INDEX_WARMING'
-      ? ' (The search index is warming up. Retry later; no logs were scanned.)'
+      ? ' (The session search index is still warming up, so nothing was searched. Retry later.)'
       : ' (Indexed search failed; no logs were scanned. Report this to the user; do not scan logs as a workaround. FTS matches tokens, not arbitrary substrings.)'
   }
   throw error
