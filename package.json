@@ -1,6 +1,6 @@
 {
   "name": "dsh-session-tools",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "Indexed, project-scoped DSH session browsing tools",
   "type": "module",
   "main": "dist/index.js",
@@ -17,13 +17,13 @@
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "4.1.0",
-    "@deepseek-ai/dsh-session": "0.2.2-rc.1",
-    "@deepseek-ai/dsh-session-projection": "0.2.2-rc.1",
-    "@deepseek-ai/dsh-session-projection-cache": "0.2.2-rc.1",
-    "@deepseek-ai/dsh-session-query": "0.2.2-rc.1",
-    "@deepseek-ai/dsh-tools": "0.2.2-rc.1",
-    "@deepseek-ai/dsh-workspace": "0.2.2-rc.1",
-    "@deepseek-ai/dsh-agent": "0.2.2-rc.1"
+    "@deepseek-ai/dsh-session": "0.2.2-rc.5",
+    "@deepseek-ai/dsh-session-projection": "0.2.2-rc.5",
+    "@deepseek-ai/dsh-session-projection-cache": "0.2.2-rc.5",
+    "@deepseek-ai/dsh-session-query": "0.2.2-rc.5",
+    "@deepseek-ai/dsh-tools": "0.2.2-rc.5",
+    "@deepseek-ai/dsh-workspace": "0.2.2-rc.5",
+    "@deepseek-ai/dsh-agent": "0.2.2-rc.5"
   },
   "peerDependenciesMeta": {
     "@deepseek-ai/dsh-session-projection-cache": {
@@ -34,21 +34,21 @@
     "@deepseek-ai/cordis": "4.1.0",
     "@deepseek-ai/cordis-plugin-include": "1.1.0",
     "@deepseek-ai/cordis-plugin-loader": "1.1.0",
-    "@deepseek-ai/dsh-agent-loop": "0.2.2-rc.1",
-    "@deepseek-ai/dsh-llm": "0.2.2-rc.1",
-    "@deepseek-ai/dsh-session": "0.2.2-rc.1",
-    "@deepseek-ai/dsh-session-persistence-jsonl": "0.2.2-rc.1",
-    "@deepseek-ai/dsh-session-projection": "0.2.2-rc.1",
-    "@deepseek-ai/dsh-session-projection-cache": "0.2.2-rc.1",
-    "@deepseek-ai/dsh-session-query": "0.2.2-rc.1",
-    "@deepseek-ai/dsh-session-query-sqlite": "0.2.2-rc.1",
-    "@deepseek-ai/dsh-system-prompt": "0.2.2-rc.1",
-    "@deepseek-ai/dsh-tools": "0.2.2-rc.1",
-    "@deepseek-ai/dsh-workspace": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-agent-loop": "0.2.2-rc.5",
+    "@deepseek-ai/dsh-llm": "0.2.2-rc.5",
+    "@deepseek-ai/dsh-session": "0.2.2-rc.5",
+    "@deepseek-ai/dsh-session-persistence-jsonl": "0.2.2-rc.5",
+    "@deepseek-ai/dsh-session-projection": "0.2.2-rc.5",
+    "@deepseek-ai/dsh-session-projection-cache": "0.2.2-rc.5",
+    "@deepseek-ai/dsh-session-query": "0.2.2-rc.5",
+    "@deepseek-ai/dsh-session-query-sqlite": "0.2.2-rc.5",
+    "@deepseek-ai/dsh-system-prompt": "0.2.2-rc.5",
+    "@deepseek-ai/dsh-tools": "0.2.2-rc.5",
+    "@deepseek-ai/dsh-workspace": "0.2.2-rc.5",
     "@types/node": "^26.6.3",
     "typescript": "^6.0.3",
-    "@deepseek-ai/dsh-agent": "0.2.2-rc.1",
-    "@deepseek-ai/dsh-tool-executor-native": "0.2.2-rc.1"
+    "@deepseek-ai/dsh-agent": "0.2.2-rc.5",
+    "@deepseek-ai/dsh-tool-executor-native": "0.2.2-rc.5"
   },
   "license": "MIT",
   "exports": {

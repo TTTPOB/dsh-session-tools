@@ -158,7 +158,7 @@ test('index warmup tells both search callers to retry later without retrying or 
       assert.equal(actual.code, code)
       assert.match(actual.message, /warming up/i)
       assert.match(actual.message, /retry later/i)
-      assert.match(actual.message, /no logs were scanned/i)
+      assert.match(actual.message, /no logs were scanned|nothing was searched/i)
       return true
     })
     assert.equal(calls, 1)

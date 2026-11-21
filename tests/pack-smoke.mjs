@@ -41,7 +41,7 @@ try {
     join(root, `dsh-session-tools-${version}.tgz`),
     ...Object.entries(manifest.peerDependencies).filter(([name]) => !forkNames.includes(name)).map(([name, version]) => name + '@' + version),
     ...forkPackages,
-    ...['agent','ptc-runtime','llm','scope','system-prompt','user-approval','sandbox','sandbox-policy','session-title','tool-todo','session-persistence'].map(x => '@deepseek-ai/dsh-' + x + '@' + release.baseline),
+    ...['agent','error','ptc-runtime','llm','scope','system-prompt','user-approval','sandbox','sandbox-policy','session-title','tool-todo','session-persistence'].map(x => '@deepseek-ai/dsh-' + x + '@' + release.baseline),
   ], { cwd: root, env, stdio: 'pipe' })
   const hostRequire = createRequire(join(root, 'package.json'))
   const pluginUrl = execFileSync(process.execPath, ['--input-type=module', '-e',

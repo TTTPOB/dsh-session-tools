@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
+import { setTimeout } from 'node:timers/promises'
 import { Context } from '@deepseek-ai/cordis'
 import SessionStore, { SessionId } from '@deepseek-ai/dsh-session'
 import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
@@ -44,6 +45,17 @@ test('actual SQLite index honors project/all, cursor and native tool results', a
       assert.ok(result.value && typeof result.value === 'object')
       assert.equal(JSON.parse(result.content.find(x => x.type === 'text').text).has_more, result.value.has_more)
       return result.value
+    }
+    // Wait for the fixture's background index, not by retrying through the plugin.
+    const readyBy = Date.now() + 5_000
+    for (;;) {
+      try {
+        await ctx.sessionQuery.searchSessions({ query: 'needle', limit: 1 })
+        break
+      } catch (error) {
+        if (error.code !== 'SESSION_QUERY_INDEX_WARMING' || Date.now() >= readyBy) throw error
+        await setTimeout(25)
+      }
     }
     const first = await execute('session_search', { query: 'needle', limit: 1 })
     assert.equal(first.items.length, 1); assert.equal(first.has_more, true)
