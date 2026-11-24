@@ -66,11 +66,23 @@ Raw 缓存仅保存同 provider/session/原 seq 的已准备 code points 与 cap
 
 [src/event-projection.ts](src/event-projection.ts) 提供 `projectActivity(model, activity, options)` 和 `projectTarget(model, seq, options)`。target 只展示目标记录或自身工具配对，返回已知 activity/root/parent locator；目标配对和必要引用齐全时，未请求的根、父、兄弟或子调用不算缺失或展示截断。activity 才展示工具树。普通工具展示真实 `surfaceOp: "append"` 的原结果；只有 tool/result replacement 的明确单节点 startSeq/endSeq 引用可在 `maxDepth`／`maxNodes` 内递归定位同一调用的 append 结果。source 集合允许包含额外诊断，不等于被覆盖的节点数。单目标 replacement 的独立活动锚点与 target 复用原结果定位，保留 replacement 自身入口及活动身份，只展示该调用、不扩展其整个 Step。summary/checkpoint 保留独立语义；目标记录和已定位引用保留 seq/read_seq、surface metadata、实际来源与原结果 locator，不重复展开工具节点已展示的参数和结果。本模块不提供 Raw 或改变 Raw 的 requested seq。
 
-`job/registered`、`job/settled` 和 `working-directory/change` 保留有界原字段；`plugin:` 记录标记为 `plugin-record`，保留完整事件类型和 Raw seq 入口，不解释插件私有 payload 或读取相关任务输出。
+两种视图共用调用定位格式。工具树顶层 `call_id` 是完整 ID；父节点不在投影中时，顶层节点附已知的 `parent_call_id` 和 `root_call_id`。嵌套节点的父子关系由树表达。子调用 ID 以父调用的完整 ID 开头时，`call_id` 仅写后缀（如 `:ptc:1`）；还原时把父调用的完整 ID 和后缀拼接。没有此前缀的子调用保留完整 ID。记录的调用归属由工具节点的 `source_seqs` 给出；不在已展示工具树中的记录保留规范化的 `call_id` 及不同于它的已知父／根 ID。助手消息仍以 `tool_calls[].call_id` 链接调用。工具节点的 `source_seqs` 可直接用于回读。
 
-`options.view` 为 compact/detail。相同预算下，Compact 保留首个可见消息块和首个工具结果块、省略工具参数及错误正文；Detail 展示有界多块内容、参数、错误和 meta。两者保留角色、消息／调用身份、来源类别、工具增删事实及各层错误存在、code 和 seq；Compact 的内容省略标记 `truncated`，不会改变已核实的配对和身份。Developer 的 Detail 从已读到的 `headerSeq` 对应 request/header.tools 有界选取已发现 addition 的定义，放入现有 preview.tools；removal 保留变更身份，不展开定义或整个 header。已核实的 header seq 计入来源集合，headerSeq 保留 Raw 定位入口；header 缺失由 reader 的既有 evidence 表达。Reasoning 和嵌入 stream 不作为普通消息正文展开。
+Compact 通常保留首个可见消息块、首个工具结果块，省略调用参数和错误正文。以下事件只预览指定字段；省略字段时标记 `truncated: true`，可用 Detail 查看有界的完整字段集：
 
-调用方显式提供 `options.budget`：`maxStringChars`（Unicode code points）、`maxItems`、`maxDepth`、`maxNodes` 和最终 JSON UTF-8 `outputBytes`。消息和 developer 工具增删块的实际访问受 maxItems／maxNodes 限制；工具树受每层 maxItems、总 maxNodes 和 maxDepth 限制，达到上限后不访问剩余节点。预览先有界访问原字段，再序列化有限结果；字段名超限的预览字段省略。最终预算不足时继续省略预览，保留身份、seq、已发现错误及其 Raw 入口；树节点省略后，记录证据仍保留已发现的错误，关联阶段已知配对缺口仍影响完整性。最小元数据仍超限则抛错。reader 仍负责约束传入的事件数、读取字节和跨度；默认限额由插件 Config 提供。
+| 事件 | Compact 预览字段 |
+|---|---|
+| `request/header` | `reason`、从 `header.config` 提取的 `provider`、`model` |
+| `system/message` | `role`、`empty` |
+| `session/title-llm-request` | `titleProvider`、`route` |
+| `job/registered` | `jobId`、`kind`、`label` |
+| `job/settled` | `jobId`、`status`、`cause`、`detail` |
+
+Detail 展示有界多块内容、参数、错误和 `meta`。Developer 的 Detail 按消息引用的 `headerSeq` 在 `request/header` 的工具定义中选出新增工具，放入 `preview.tools`；移除工具只保留变更身份。已核实的 header seq 计入来源集合，`headerSeq` 是 Raw 入口。Reasoning 和嵌入 stream 不作为普通消息正文展开。`working-directory/change` 保留有界原字段；`plugin:` 记录标记为 `plugin-record`，保留事件类型和 Raw 入口。
+
+调用方显式提供 `options.budget`：`maxStringChars`（Detail 每个字符串的 Unicode code points）、`maxPreviewChars`（Compact 对应上限）、`maxItems`、`maxDepth`、`maxNodes` 和最终 JSON UTF-8 `outputBytes`。消息和 developer 工具增删块的实际访问受 `maxItems`／`maxNodes` 限制；工具树受每层 `maxItems`、总 `maxNodes` 和 `maxDepth` 限制。预览先有界访问原字段，再序列化有限结果；字段名超限的预览字段省略。reader 负责约束传入的事件数、读取字节和跨度；默认限额由插件 Config 提供。
+
+单个活动超出 `outputBytes` 时先删可选预览，再从中间向两端逐条略去非必要记录。始终保留本页锚点、有错误事实的记录和活动首尾记录；`source_seqs`、`page_source_seqs` 仍按删减前的全部证据计算。略去记录时返回 `records_omitted` 和 `truncated: true`，不改变 `complete` 的读齐判定。必要元数据仍超限才报错。可用保留的来源序号进一步回读。
 
 reader 可传入 `options.evidence.pageSourceSeqs`、`coverageComplete`、`incompleteReasons`：页内来源不会因补读而增加，Activity 未有读取覆盖证据时保持 incomplete，目标工具缺调用/结果或明确原结果引用时附缺口。`complete` 和正文裁剪的 `truncated` 独立。`coverageComplete` 必须由 reader 的固定 observation 和实际覆盖证明，不能仅因看到首尾边界或一个完整工具对就设为 true。返回值不持有 observation 或执行 I/O，现有公共工具接口在本节之外定义。
 

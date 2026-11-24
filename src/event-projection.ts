@@ -59,8 +59,10 @@ export interface ProjectionOptions {
 type Json = null | boolean | number | string | Json[] | { [key: string]: Json }
 interface Bounded { value: Json; truncated: boolean }
 
+const callLocatorKeys = new Set(['callId', 'subCallId', 'parentCallId', 'rootCallId'])
+
 /** Visit bounded nodes before serializing; do not materialize or stringify huge original payloads. */
-function bound(value: unknown, budget: ProjectionBudget): Bounded {
+function bound(value: unknown, budget: ProjectionBudget, recordPreview: boolean): Bounded {
   let remaining = budget.maxNodes
   let truncated = false
   const visit = (input: unknown, depth: number): Json => {
@@ -86,7 +88,7 @@ function bound(value: unknown, budget: ProjectionBudget): Bounded {
       const output: Record<string, Json> = {}
       let count = 0
       for (const key in input) {
-        if (!Object.hasOwn(input, key)) continue
+        if (!Object.hasOwn(input, key) || (recordPreview && depth === 0 && callLocatorKeys.has(key))) continue
         if (count++ >= budget.maxItems || remaining <= 0) { truncated = true; break }
         const boundedKey = visit(key, depth + 1) as string
         if (boundedKey === key) output[key] = visit(fields(input)[key], depth + 1)
@@ -112,8 +114,8 @@ function errorFacts(event: ReadingEvent): Record<string, Json> {
 
 function locator(event: ReadingEvent): Record<string, Json> {
   const d = fields(event.data), result: Record<string, Json> = {}
-  for (const key of ['turn', 'step', 'callId', 'subCallId', 'rootCallId', 'parentCallId',
-    'compactionId', 'retryId', 'runId', 'commandId', 'id', 'headerSeq', 'sourceCommandId', 'childId', 'childCreatedAt', 'messageId']) {
+  for (const key of ['turn', 'step', 'compactionId', 'retryId', 'runId', 'commandId', 'id',
+    'headerSeq', 'sourceCommandId', 'childId', 'childCreatedAt', 'messageId']) {
     const value = d[key]
     if (typeof value === 'string' || typeof value === 'number') result[key] = value
   }
@@ -122,8 +124,6 @@ function locator(event: ReadingEvent): Record<string, Json> {
   if (typeof message.id === 'string') result.message_id = message.id
   if (typeof message.role === 'string') result.role = message.role
   if (typeof source.kind === 'string') result.source_kind = source.kind
-  const id = toolIdentity(event)
-  if (id !== undefined) result.call_id = id
   if (event.type.startsWith('tool-workflow/agent-') && typeof d.seq === 'number') result.agent_seq = d.seq
   return result
 }
@@ -145,8 +145,29 @@ function messageBlocks(content: unknown, eventType: string, view: ProjectionOpti
   return { visible, toolChanges, toolCalls }
 }
 
-function previewFields(event: ReadingEvent, view: ProjectionOptions['view'], messagePreview?: unknown, toolDefinitions?: unknown): unknown {
+function compactFields(data: Record<string, unknown>, keys: readonly string[], onTruncated: () => void): Record<string, unknown> {
+  if (Object.keys(data).some(key => !keys.includes(key))) onTruncated()
+  return Object.fromEntries(keys.filter(key => Object.hasOwn(data, key)).map(key => [key, data[key]]))
+}
+
+function previewFields(event: ReadingEvent, view: ProjectionOptions['view'], onTruncated: () => void,
+  messagePreview?: unknown, toolDefinitions?: unknown): unknown {
   const d = fields(event.data), message = fields(d.message)
+  if (view === 'compact') {
+    switch (event.type) {
+      case 'request/header': {
+        const { header, ...request } = compactFields(d, ['reason', 'header'], onTruncated)
+        const { config } = compactFields(fields(header), ['config'], onTruncated)
+        return { ...request, ...compactFields(fields(config), ['provider', 'model'], onTruncated) }
+      }
+      case 'system/message':
+        if (message.content !== undefined || message.source !== undefined || d.interrupted !== undefined) onTruncated()
+        return { role: message.role, empty: Array.isArray(message.content) && message.content.length === 0 }
+      case 'session/title-llm-request': return compactFields(d, ['titleProvider', 'route'], onTruncated)
+      case 'job/registered': return compactFields(d, ['jobId', 'kind', 'label'], onTruncated)
+      case 'job/settled': return compactFields(d, ['jobId', 'status', 'cause', 'detail'], onTruncated)
+    }
+  }
   const strategy = projectionStrategy(event.type)
   if (strategy === 'message') {
     const content = event.type === 'user/message' ? d.content : message.content
@@ -184,7 +205,6 @@ interface ProjectedTool {
   [key: string]: Json | ProjectedTool[] | undefined
   call_id: string
   source_seqs: number[]
-  read_seqs: number[]
   children?: ProjectedTool[]
   arguments?: Json
   result?: Json
@@ -200,6 +220,7 @@ export interface EventProjection {
   page_source_seqs: number[]
   activity_locator?: { activity_id?: string; root_call_id?: string; parent_call_id?: string }
   records: ProjectedRecord[]
+  records_omitted?: number
   tools: ProjectedTool[]
   complete: boolean
   incomplete_reasons: string[]
@@ -216,9 +237,10 @@ function project(model: EventAssociation, events: readonly ReadingEvent[], tools
   const reasons = new Set([...(options.evidence?.incompleteReasons ?? []), ...(activity?.toolGaps ?? [])])
   const previewBudget = options.view === 'compact'
     ? { ...options.budget, maxStringChars: options.budget.maxPreviewChars } : options.budget
-  const addPreview = (value: unknown, set: (value: Json) => void, remove: () => void) => {
+  const markTruncated = () => { output.truncated = true }
+  const addPreview = (value: unknown, set: (value: Json) => void, remove: () => void, recordPreview = false) => {
     if (value === undefined) return
-    const bounded = bound(value, previewBudget)
+    const bounded = bound(value, previewBudget, recordPreview)
     output.truncated ||= bounded.truncated
     set(bounded.value)
     omitted.push(remove)
@@ -243,9 +265,9 @@ function project(model: EventAssociation, events: readonly ReadingEvent[], tools
       record.empty = Array.isArray(content) && content.length === 0
     }
     let messagePreview: unknown, toolDefinitions: unknown
-    if (EVENT_PROJECTION_STRATEGIES[event.type] === 'message') {
+    if (EVENT_PROJECTION_STRATEGIES[event.type] === 'message' && !(event.type === 'system/message' && options.view === 'compact')) {
       const content = event.type === 'user/message' ? d.content : fields(d.message).content
-      const blocks = messageBlocks(content, event.type, options.view, options.budget, expandChildren, () => { output.truncated = true })
+      const blocks = messageBlocks(content, event.type, options.view, options.budget, expandChildren, markTruncated)
       messagePreview = blocks.visible
       if (blocks.toolChanges.length) record.tool_changes = blocks.toolChanges
       if (event.type === 'developer/message' && typeof d.headerSeq === 'number') {
@@ -279,18 +301,27 @@ function project(model: EventAssociation, events: readonly ReadingEvent[], tools
     if (event.surfaceOp) record.surface_op = event.surfaceOp === 'append' ? 'append' : { ...event.surfaceOp }
     // Paired execution content belongs to the tool node, not a duplicate record preview.
     if (!(EVENT_PROJECTION_STRATEGIES[event.type] === 'tool' && tools.length))
-      addPreview(previewFields(event, options.view, messagePreview, toolDefinitions), value => { record.preview = value }, () => { delete record.preview })
+      addPreview(previewFields(event, options.view, markTruncated, messagePreview, toolDefinitions),
+        value => { record.preview = value }, () => { delete record.preview }, true)
     output.records.push(record)
   }
   let renderedNodes = 0
-  const renderTool = (tool: AssociatedTool, depth: number): ProjectedTool => {
+  const renderedToolSeqs = new Set<number>()
+  const renderTool = (tool: AssociatedTool, depth: number, parentId?: string): ProjectedTool => {
     renderedNodes++
     const evidence = [...tool.blockEvents, ...(tool.call ? [tool.call] : []), ...(tool.result ? [tool.result] : [])]
     const seqs = [...new Set(evidence.map(event => event.seq))].sort((a, b) => a - b)
-    seqs.forEach(seq => sourceSeqs.add(seq))
-    const node: ProjectedTool = { call_id: tool.id, name: tool.name, parent_call_id: tool.parentId, root_call_id: tool.rootId,
-      source_seqs: seqs, read_seqs: seqs, start_seq: tool.call?.seq, result_seq: tool.result?.seq,
+    for (const seq of seqs) {
+      sourceSeqs.add(seq)
+      renderedToolSeqs.add(seq)
+    }
+    const node: ProjectedTool = { call_id: parentId !== undefined && tool.id.startsWith(parentId) ? tool.id.slice(parentId.length) : tool.id,
+      name: tool.name, source_seqs: seqs, start_seq: tool.call?.seq, result_seq: tool.result?.seq,
       execution_observed: Boolean(tool.call || tool.result), result_observed: Boolean(tool.result) }
+    if (parentId === undefined) {
+      if (tool.parentId !== undefined) node.parent_call_id = tool.parentId
+      if (tool.rootId !== undefined) node.root_call_id = tool.rootId
+    }
     if (!tool.call) reasons.add(tool.blockEvents.length ? 'execution_not_observed' : 'call_not_observed')
     if (!tool.result) reasons.add('result_not_observed')
     const callData = fields(tool.call?.data)
@@ -317,19 +348,28 @@ function project(model: EventAssociation, events: readonly ReadingEvent[], tools
     }
     if (expandChildren && tool.children.length) {
       if (depth >= options.budget.maxDepth) output.truncated = true
-      else node.children = renderTools(tool.children, depth + 1)
+      else node.children = renderTools(tool.children, depth + 1, tool.id)
     }
     return node
   }
-  const renderTools = (nodes: readonly AssociatedTool[], depth: number): ProjectedTool[] => {
+  const renderTools = (nodes: readonly AssociatedTool[], depth: number, parentId?: string): ProjectedTool[] => {
     const rendered: ProjectedTool[] = []
     let i = 0
     for (; i < nodes.length && i < options.budget.maxItems && renderedNodes < options.budget.maxNodes; i++)
-      rendered.push(renderTool(nodes[i], depth))
+      rendered.push(renderTool(nodes[i], depth, parentId))
     if (i < nodes.length) output.truncated = true
     return rendered
   }
   output.tools = renderTools(tools, 0)
+  events.forEach((event, i) => {
+    if (renderedToolSeqs.has(event.seq)) return
+    const id = toolIdentity(event)
+    const { parentCallId, rootCallId } = fields(event.data)
+    const record = output.records[i]
+    if (id !== undefined) record.call_id = id
+    if (typeof parentCallId === 'string' && parentCallId !== id) record.parent_call_id = parentCallId
+    if (typeof rootCallId === 'string' && rootCallId !== id) record.root_call_id = rootCallId
+  })
   output.source_seqs = [...sourceSeqs].sort((a, b) => a - b)
   output.page_source_seqs = (options.evidence?.pageSourceSeqs ?? []).filter(seq => sourceSeqs.has(seq))
   if (activity && !options.evidence?.coverageComplete) reasons.add('activity_coverage_unproven')
@@ -366,12 +406,32 @@ function project(model: EventAssociation, events: readonly ReadingEvent[], tools
   output.complete = reasons.size === 0
   finish?.(output)
   const bytes = () => Buffer.byteLength(JSON.stringify(output), 'utf8')
-  // Identity, seqs, topology and already observed failure facts are never budget casualties.
-  while (bytes() > options.budget.outputBytes && omitted.length) {
+  const { outputBytes } = options.budget
+  while (omitted.length && bytes() > outputBytes) {
     omitted.pop()!()
-    output.truncated = true
+    markTruncated()
   }
-  if (bytes() > options.budget.outputBytes) throw new Error('Projection metadata exceeds outputBytes; reduce the requested page or scope')
+  if (activity && bytes() > outputBytes) {
+    const { records } = output
+    const anchors = new Set(output.page_source_seqs)
+    const dropped = new Set<number>()
+    markTruncated()
+    output.records_omitted = 0
+    let size = bytes()
+    // Alternate from the center toward the ends, never visiting the first and last records.
+    let left = Math.floor((records.length - 1) / 2), right = left + 1
+    for (let i = 0; i < records.length - 2; i++) {
+      const record = records[i % 2 ? right++ : left--]
+      if (anchors.has(record.seq) || record.error_observed) continue
+      dropped.add(record.seq)
+      // Removing one array element also removes a comma. The initial size includes a one-digit count.
+      size -= Buffer.byteLength(JSON.stringify(record), 'utf8') + 1
+      if (size + String(dropped.size).length - 1 <= outputBytes) break
+    }
+    output.records = records.filter(record => !dropped.has(record.seq))
+    output.records_omitted = dropped.size
+  }
+  if (bytes() > outputBytes) throw new Error('Projection metadata exceeds outputBytes; reduce the requested page or scope')
   return output
 }
 

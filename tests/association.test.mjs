@@ -26,7 +26,7 @@ test('Step identity, executed arguments, direct parallel PTC tree and independen
   assert.deepEqual(root.children.map(tool => tool.call_id), ['a', 'b'])
   assert.equal(root.children[0].result_seq, 28)
   assert.equal(root.children[1].result_seq, 26)
-  assert.equal(root.children[0].children[0].parent_call_id, 'a')
+  assert.equal(Object.hasOwn(root.children[0].children[0], 'parent_call_id'), false)
   assert.equal(root.children[0].children[0].error_code, 'FS_NOT_FOUND')
   assert.equal(root.children[0].children[0].is_error, true)
   assert.deepEqual(root.children[0].children[0].source_seqs, [25, 27])
@@ -74,6 +74,70 @@ test('Step identity, executed arguments, direct parallel PTC tree and independen
   assert.deepEqual(missingHeader.incomplete_reasons, ['header_reference_not_observed'])
   assert.equal(activity(70).kind, 'ptc-fragment')
   assert.notEqual(activity(70), activity(71))
+})
+
+test('tool trees use relative child IDs and records point to the rendered evidence', () => {
+  const rootId = history.find(event => event.seq === 21).data.callId
+  const childId = `${rootId}:ptc:1`
+  const nestedId = `${childId}:ptc:1`
+  const ids = { a: childId, nested: nestedId }
+  const events = history.map(event => event.type.startsWith('tool/ptc-') ? { ...event, data: { ...event.data,
+    subCallId: ids[event.data.subCallId] ?? event.data.subCallId, parentCallId: ids[event.data.parentCallId] ?? event.data.parentCallId,
+  } } : event)
+  const local = associate(events)
+  const step = local.activityBySeq.get(20)
+  const idKeys = ['callId', 'subCallId', 'rootCallId', 'parentCallId', 'call_id', 'parent_call_id', 'root_call_id']
+  for (const view of [compact, detail]) {
+    const projected = projectActivity(local, step, view)
+    const root = projected.tools.find(tool => tool.call_id === rootId)
+    const [child, opaque] = root.children
+    const [nested] = child.children
+    assert.equal(child.call_id, childId.slice(root.call_id.length))
+    assert.equal(nested.call_id, nestedId.slice(childId.length))
+    assert.equal(root.call_id + child.call_id + nested.call_id, nestedId)
+    assert.equal(opaque.call_id, events.find(event => event.seq === opaque.start_seq).data.subCallId)
+    for (const node of [root, child, nested, opaque]) {
+      assert.equal(Object.hasOwn(node, 'read_seqs'), false)
+      for (const key of ['parent_call_id', 'root_call_id']) assert.equal(Object.hasOwn(node, key), false)
+      for (const record of projected.records.filter(record => node.source_seqs.includes(record.seq))) {
+        for (const key of idKeys) assert.equal(Object.hasOwn(record, key), false)
+      }
+    }
+    const message = projected.records.find(record => record.seq === 20)
+    assert.equal(message.tool_calls[0].call_id, rootId)
+    const target = projectTarget(local, 27, view)
+    assert.equal(target.tools[0].call_id, nestedId)
+    assert.equal(target.tools[0].parent_call_id, childId)
+    assert.equal(target.tools[0].root_call_id, rootId)
+    assert.equal(target.activity_locator.parent_call_id, childId)
+    const fragment = projectActivity(local, local.activityBySeq.get(71), view)
+    const { subCallId, parentCallId, rootCallId } = events.find(event => event.seq === 71).data
+    assert.equal(fragment.tools[0].call_id, subCallId)
+    assert.equal(fragment.tools[0].parent_call_id, parentCallId)
+    assert.equal(fragment.tools[0].root_call_id, rootCallId)
+    const limited = projectActivity(local, step, { ...view, budget: { ...view.budget, maxDepth: 0 } })
+    const record = limited.records.find(record => record.seq === 25)
+    assert.deepEqual(Object.fromEntries(idKeys.filter(key => Object.hasOwn(record, key)).map(key => [key, record[key]])),
+      { call_id: nestedId, parent_call_id: childId, root_call_id: rootId })
+    const replacement = projectTarget(local, 90, view).records[0]
+    assert.deepEqual(idKeys.filter(key => Object.hasOwn(replacement, key)), ['call_id'])
+    assert.equal(replacement.call_id, rootId)
+  }
+})
+
+test('an independent delivery record exposes its call ID only through its locator', () => {
+  const event = { seq: 1, type: 'deliverables/presented', data: {
+    turn: 1, callId: 'deliver-artifact', files: [{ path: '/project/result.md' }],
+  } }
+  const local = associate([event])
+  for (const view of [compact, detail]) {
+    const { tools, records: [record] } = projectTarget(local, event.seq, view)
+    assert.deepEqual(tools, [])
+    assert.equal(record.call_id, event.data.callId)
+    assert.equal(Object.hasOwn(record, 'callId'), false)
+    assert.equal(Object.hasOwn(record.preview, 'callId'), false)
+    assert.deepEqual(record.preview.files, event.data.files)
+  }
 })
 
 test('target is just one pair and known locators, independent of density and PTC fanout', () => {
@@ -206,6 +270,55 @@ test('lifecycle IDs, workflow member seq, failed compaction without summary and 
   for (const event of history) assert.ok(model.activityBySeq.has(event.seq))
 })
 
+test('compact request headers flatten the route without inspecting tool definitions', () => {
+  const event = history.find(event => event.type === 'request/header')
+  const { reason, header } = event.data
+  const { provider, model: routeModel } = header.config
+  const guarded = guardedBlocks(header.tools, 0)
+  const compactEvent = { ...event, data: { ...event.data, startsSeries: true,
+    header: { ...header, config: { ...header.config, privateOption: 'unused' }, tools: guarded.content } } }
+  const concise = projectTarget(associate([compactEvent]), event.seq, compact)
+  assert.deepEqual(concise.records[0].preview, { reason, provider, model: routeModel })
+  assert.equal(concise.truncated, true)
+  assert.equal(guarded.visits, 0)
+  const expanded = projectTarget(model, event.seq, detail)
+  assert.deepEqual(expanded.records[0].preview.config, header.config)
+  assert.deepEqual(expanded.records[0].preview.tools, header.tools)
+  assert.deepEqual(expanded.records[0].preview.adapterDefaults, header.adapterDefaults)
+  const routeOnly = { ...event, data: { reason, header: { config: { provider, model: routeModel } } } }
+  assert.equal(projectTarget(associate([routeOnly]), event.seq, compact).truncated, false)
+})
+
+test('compact system messages retain role and empty status without inspecting content', () => {
+  const event = history.find(event => event.type === 'system/message')
+  const { message } = event.data
+  const content = [{ type: 'text', text: 'private instructions' }]
+  const guarded = guardedBlocks(content, 0)
+  const withContent = blocks => ({ ...event, data: { ...event.data, message: { ...message, content: blocks } } })
+  const concise = projectTarget(associate([withContent(guarded.content)]), event.seq, compact)
+  assert.deepEqual(concise.records[0].preview, { role: message.role, empty: false })
+  assert.equal(concise.truncated, true)
+  assert.equal(guarded.visits, 0)
+  assert.deepEqual(projectTarget(associate([withContent(content)]), event.seq, detail).records[0].preview.content, content)
+  assert.deepEqual(projectTarget(model, event.seq, compact).records[0].preview, { role: message.role, empty: true })
+})
+
+const job = { jobId: 'build-1', owner: 'source-session', kind: 'shell', label: 'build', startedAt: 100 }
+for (const [type, data, visible] of [
+  ['job/registered', job, ['jobId', 'kind', 'label']],
+  ['job/settled', { ...job, status: 'killed', cause: 'kill-request', detail: 'cancelled', finishedAt: 101 }, ['jobId', 'status', 'cause', 'detail']],
+  ['session/title-llm-request', { titleProvider: 'title-v1', route: { provider: 'test', model: 'fixture' }, system: 'title prompt', messageSeqs: [12] }, ['titleProvider', 'route']],
+]) {
+  test(`compact ${type} previews expose only selected fields`, () => {
+    const event = { seq: 1, type, data }
+    const local = associate([event])
+    const concise = projectTarget(local, event.seq, compact)
+    assert.deepEqual(concise.records[0].preview, Object.fromEntries(visible.map(key => [key, data[key]])))
+    assert.equal(concise.truncated, true)
+    assert.deepEqual(projectTarget(local, event.seq, detail).records[0].preview, data)
+  })
+}
+
 test('rc.1 jobs, working-directory changes and plugin records preserve bounded facts and raw locators', () => {
   const events = [
     { seq: 1, type: 'job/registered', data: { id: 'job-1', kind: 'shell', label: 'build' } },
@@ -228,6 +341,41 @@ test('rc.1 jobs, working-directory changes and plugin records preserve bounded f
   assert.equal(limited.records[0].preview.text, '😀'.repeat(5))
   assert.equal(limited.records[0].type, 'plugin:experiment/record')
   assert.equal(limited.truncated, true)
+})
+
+test('an oversized activity drops middle records, retaining anchors, errors and both ends', () => {
+  const opts = options(detail, { coverageComplete: true, pageSourceSeqs: [9, 24, 25] })
+  const step = activity(20)
+  const full = projectActivity(model, step, opts)
+  assert.equal(Object.hasOwn(full, 'records_omitted'), false)
+  const bytes = value => Buffer.byteLength(JSON.stringify(value), 'utf8')
+  const trimmedTo = outputBytes => projectActivity(model, step, { ...opts, budget: { ...opts.budget, outputBytes } })
+  const metadata = structuredClone(full)
+  const stripTool = tool => {
+    for (const key of ['result', 'error', 'arguments', 'meta']) delete tool[key]
+    tool.children?.forEach(stripTool)
+  }
+  metadata.tools.forEach(stripTool)
+  for (const record of metadata.records) delete record.preview
+  const byteBudgetFor = records => bytes({ ...metadata, records, truncated: true, records_omitted: full.records.length - records.length })
+  const keepAroundMiddle = metadata.records.filter(record => ![26, 22, 28].includes(record.seq))
+  const outputBytes = byteBudgetFor(keepAroundMiddle)
+  const summary = trimmedTo(outputBytes)
+  assert.equal(bytes(summary), outputBytes)
+  assert.deepEqual(summary.records, keepAroundMiddle)
+  assert.equal(summary.records_omitted, full.records.length - keepAroundMiddle.length)
+  assert.equal(summary.truncated, true)
+  assert.equal(summary.complete, full.complete)
+  assert.deepEqual(summary.source_seqs, full.source_seqs)
+  // The header seq is a page anchor included via the developer message's reference, not its own record.
+  assert.deepEqual(summary.page_source_seqs, opts.evidence.pageSourceSeqs)
+  const required = metadata.records.filter(record => [10, 24, 25, 27, 41].includes(record.seq))
+  const minimum = byteBudgetFor(required)
+  const smallest = trimmedTo(minimum)
+  assert.deepEqual(smallest.records, required)
+  assert.deepEqual(smallest.source_seqs, full.source_seqs)
+  assert.deepEqual(smallest.page_source_seqs, opts.evidence.pageSourceSeqs)
+  assert.throws(() => trimmedTo(minimum - 1), /Projection metadata exceeds outputBytes/)
 })
 
 test('bounded previews never serialize original huge objects and final UTF-8 budget preserves errors and seqs', () => {
