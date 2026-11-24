@@ -81,7 +81,7 @@ test('actual SQLite index honors project/all, cursor and native tool results', a
     const listThird = await execute('session_list', { limit: 1, cursor: listSecond.next_cursor })
     assert.equal(listThird.items[0].session_id, 'one'); assert.equal(listThird.has_more, false)
     const events = await execute('session_event_list', { session_id: 'one' })
-    assert.equal(events.activities[0].page_source_seqs[0], 0)
+    assert.equal(events.items[0].page_source_seqs[0], 0)
     const raw = await execute('session_event_read', { view: 'raw', session_id: 'one', seq: 0 })
     assert.equal(raw.format, 'event-json')
     const trace = await execute('session_event_trace', { session_id: 'one', seq: 0 })

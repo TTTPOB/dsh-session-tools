@@ -253,7 +253,7 @@ export class BoundedReader {
 }
 
 /** Atomically fit the final wrapped page, preserving identity, error facts, anchors and cursor. */
-export function commitReadingPage(page: object, projections: readonly EventProjection[], outputBytes: number): Record<string, JsonValue> {
+export function commitReadingPage(page: object, projections: readonly EventProjection[], outputBytes: number, overflowMessage: string): Record<string, JsonValue> {
   let json = ''
   const fits = () => { json = JSON.stringify(page); return Buffer.byteLength(json, 'utf8') <= outputBytes }
   if (fits()) return JSON.parse(json) as Record<string, JsonValue>
@@ -269,6 +269,6 @@ export function commitReadingPage(page: object, projections: readonly EventProje
     for (const tool of projection.tools) visit(tool, projection)
   }
   while (!fits() && removable.length) removable.pop()!()
-  if (!fits()) throw new Error('Reading page metadata exceeds outputBytes; lower limit and retry from the same after_seq, or narrow read_scope; no partial result was returned')
+  if (!fits()) throw new Error(overflowMessage)
   return JSON.parse(json) as Record<string, JsonValue>
 }

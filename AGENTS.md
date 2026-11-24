@@ -17,7 +17,7 @@
 - 跨请求保持 `query`／`scope`／`limit`／`include_current`／`include_archived` 不变；provider 代际可能使 cursor 失效。
 - 工具只过滤 provider 的一页，**不 refill**。排除当前会话或归档会话可能得到短页甚至空页，但 `has_more: true` 且保留原始 `next_cursor`——用该 cursor 继续，不要期待工具补页。
 - 大事件分片按 **Unicode code points** 计数，不按字节或 UTF-16 code unit，不拆代理对。单个 `json_fragment` 不保证是合法 JSON：按 `next_offset` 依次读取、按序拼接后再 `JSON.parse`。
-- 整页超过 `outputBytes` 时显式报错，不返回部分页或 cursor；调用方应降低 `limit` 后不带 cursor 重新开始。
+- 事件列表超出 `outputBytes` 时返回能容纳的最长锚点前缀，按 `next_after_seq` 继续；只在单锚点页仍超限时省略可选字段。紧凑页仍放不下时，用 `view: "metadata"` 定位 seq，再用 `session_event_read` 读取。索引搜索或 `session_list` 超预算时，降低 `limit` 后不带旧 cursor 重启。
 
 ## 版本与依赖
 

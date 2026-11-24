@@ -164,11 +164,47 @@ test('index warmup tells both search callers to retry later without retrying or 
     assert.equal(calls, 1)
   }
 })
-test('event list includes structural events, EOF and explicit type filters', async () => {
-  const f = setup(provider({ listEvents: async () => [0, 1, 2].map(seq => ({ sessionId: 'a', seq, type: seq === 1 ? 'user/message' : 'turn/start', time: 0, surface: 'log-only' })) }))
-  assert.deepEqual((await run(f, 'session_event_list', { session_id: 'a', view: 'metadata' })).items.map(x => x.seq), [0, 1, 2])
-  assert.deepEqual((await run(f, 'session_event_list', { session_id: 'a', view: 'metadata', event_types: ['user/message'] })).items.map(x => x.seq), [1])
-  assert.deepEqual((await run(f, 'session_event_list', { session_id: 'a', view: 'metadata', after_seq: 2 })).items, [])
+test('event list uses items and echoes its view for compact and metadata pages', async () => {
+  const events = [0, 1, 2].map(seq => ({ sessionId: 'a', seq, type: seq === 1 ? 'user/message' : 'turn/start', time: 0, surface: 'log-only' }))
+  const f = setup(provider({ listEvents: async () => events }))
+  const args = { session_id: 'a' }
+  const compact = await run(f, 'session_event_list', args)
+  const metadata = await run(f, 'session_event_list', { ...args, view: 'metadata' })
+  assert.equal(compact.view, 'compact')
+  assert.equal(metadata.view, 'metadata')
+  assert.deepEqual(compact.items.flatMap(item => item.page_source_seqs), events.map(event => event.seq))
+  assert.deepEqual(metadata.items, events.map(({ seq, type }) => ({ seq, type })))
+  for (const page of [compact, metadata]) {
+    for (const key of ['activities', 'requested_limit', 'effective_limit', 'page_truncated', 'notices']) assert.equal(Object.hasOwn(page, key), false)
+  }
+  assert.deepEqual((await run(f, 'session_event_list', { ...args, view: 'metadata', event_types: ['user/message'] })).items.map(x => x.seq), [1])
+  assert.deepEqual((await run(f, 'session_event_list', { ...args, view: 'metadata', after_seq: events.at(-1).seq })).items, [])
+})
+
+test('event list caps only positive safe limits; other tools and sequence positions still reject overflow', async () => {
+  const limits = { pageSize: 2, maxPageSize: 4 }
+  const limit = limits.maxPageSize + 1
+  const events = Array.from({ length: limit }, (_, seq) => ({ seq, type: 'user/message', data: { content: [] } }))
+  const unexpected = () => { throw new Error('an invalid limit must not reach the provider') }
+  const f = setup(provider({ listEvents: async () => events, pageSessions: unexpected, searchSessions: unexpected, searchEvents: unexpected }), limits)
+  const args = { session_id: 'a' }
+  const page = await run(f, 'session_event_list', { ...args, limit })
+  assert.deepEqual(page.items.flatMap(item => item.page_source_seqs), events.slice(0, limits.maxPageSize).map(event => event.seq))
+  assert.equal(page.requested_limit, limit)
+  assert.equal(page.effective_limit, limits.maxPageSize)
+  assert.equal(page.next_after_seq, events[limits.maxPageSize - 1].seq)
+  assert.match(page.notices[0], /exceeds the maximum/)
+  assert.equal((await run(f, 'session_event_list', args)).items.length, limits.pageSize)
+  for (const invalid of [0, -1, Number.MAX_SAFE_INTEGER + 1]) {
+    await assert.rejects(run(f, 'session_event_list', { ...args, limit: invalid }), /limit must be a positive safe integer/)
+  }
+  await assert.rejects(run(f, 'session_event_list', { ...args, limit: 1.5 }), /"limit" must be an integer/)
+  const range = new RegExp('limit must be an integer between 1 and ' + limits.maxPageSize)
+  await assert.rejects(run(f, 'session_list', { limit }), range)
+  await assert.rejects(run(f, 'session_search', { query: 'needle', limit }), range)
+  await assert.rejects(run(f, 'session_event_search', { ...args, query: 'needle', limit }), range)
+  const unsafe = Number.MAX_SAFE_INTEGER + 1
+  await assert.rejects(run(f, 'session_event_list', { ...args, after_seq: unsafe }), /after_seq must be an integer/)
 })
 test('event JSON readable fragments reassemble without splitting Unicode', async () => {
   const text = '中文😀'.repeat(4000)
@@ -316,9 +352,9 @@ test('filtered compact previews read original fields with Unicode limits, not in
     filterEvents() { throw new Error('index text is not reading evidence') },
   }), limits)
   const page = await run(f, 'session_event_list', { session_id: 'a', event_types: ['user/message'], limit: 2 })
-  assert.deepEqual(page.activities.flatMap(x => x.page_source_seqs), [1, 3])
-  assert.equal(page.activities[0].records[0].preview.content[0].text, Array.from(text).slice(0, limits.previewChars).join(''))
-  assert.equal(page.activities[0].truncated, true); assert.equal(page.has_more, false)
+  assert.deepEqual(page.items.flatMap(x => x.page_source_seqs), [1, 3])
+  assert.equal(page.items[0].records[0].preview.content[0].text, Array.from(text).slice(0, limits.previewChars).join(''))
+  assert.equal(page.items[0].truncated, true); assert.equal(page.has_more, false)
   assert.equal(page.next_after_seq, null)
 })
 
@@ -332,7 +368,7 @@ test('message previews keep only string source identity fields while raw keeps r
   ]
   const f = setup(provider({ listEvents: async () => events }))
   const compact = await run(f, 'session_event_list', { session_id: 'a' })
-  const compactRecords = compact.activities.flatMap(activity => activity.records)
+  const compactRecords = compact.items.flatMap(activity => activity.records)
   const detailRecords = []
   for (const { seq } of events) {
     const detail = await run(f, 'session_event_read', { session_id: 'a', seq, view: 'detail' })
@@ -361,7 +397,7 @@ test('tool result previews use the configured Unicode string limit for each view
   const f = setup(provider({ listEvents: async () => events }), limits)
   const compact = await run(f, 'session_event_list', { session_id: 'a' })
   const detail = await run(f, 'session_event_read', { session_id: 'a', seq: 1, view: 'detail' })
-  for (const [projection, limit] of [[compact.activities[0], limits.previewChars], [detail, limits.projectionStringChars]]) {
+  for (const [projection, limit] of [[compact.items[0], limits.previewChars], [detail, limits.projectionStringChars]]) {
     assert.equal(projection.tools[0].result[0].text, Array.from(text).slice(0, limit).join(''))
     assert.equal(projection.truncated, true)
   }
@@ -427,32 +463,112 @@ test('trace stops ancestry at hidden parent and marks omitted descendants', asyn
   assert.equal(result.ancestors.length, 0); assert.equal(result.scope_limited, true); assert.equal(result.complete, false)
   assert.equal(JSON.stringify(result).includes('foreign'), false)
 })
-test('whole-page UTF-8 budget omits previews but preserves anchor/error facts; minimal pages reject atomically', async () => {
-  const events = [0, 1, 2].map(seq => ({ seq, type: 'hook/result', data: { exitCode: 1, stderrSummary: '中文😀'.repeat(30) } }))
-  const f = setup(provider({ listEvents: async () => events }), { projectionStringChars: 3000, outputBytes: 1024 })
-  const page = await run(f, 'session_event_list', { session_id: 'a', limit: 2 })
-  assert.ok(Buffer.byteLength(JSON.stringify(page)) <= 1024)
-  assert.equal(page.next_after_seq, 1); assert.equal(page.activities[0].records[0].error_observed, true)
-  assert.equal(page.activities[0].records[0].error_seq, 0); assert.ok(page.activities.some(activity => activity.truncated))
-  assert.deepEqual(page.activities.flatMap(activity => activity.page_source_seqs), [0, 1])
-  const many = setup(provider({ listEvents: async () => Array.from({ length: 30 }, (_, seq) => ({ seq, type: 'turn/start', data: { turn: seq } })) }), { outputBytes: 1024 })
-  await assert.rejects(run(many, 'session_event_list', { session_id: 'a', limit: 30 }), /no partial result/)
+test('compact byte paging delivers consecutive anchors even when an activity spans an omitted anchor', async () => {
+  const text = '中'.repeat(400)
+  const content = [{ type: 'text', text }]
+  const step = { turn: 1, step: 1 }
+  const events = [
+    { seq: 9, type: 'step/start', data: step },
+    { seq: 10, type: 'assistant/message', data: { ...step, message: { content } } },
+    { seq: 11, type: 'user/message', data: { content } },
+    { seq: 12, type: 'step/end', data: step },
+  ]
+  const selected = events.slice(1)
+  const limits = { previewChars: text.length, outputBytes: 2300 }
+  const f = setup(provider({ listEvents: async () => events }), limits)
+  const args = { session_id: 'a', limit: selected.length, event_types: selected.map(event => event.type) }
+  const consumed = []
+  let after_seq
+  for (const event of selected) {
+    const page = await run(f, 'session_event_list', { ...args, ...(after_seq === undefined ? {} : { after_seq }) })
+    assert.ok(Buffer.byteLength(JSON.stringify(page)) <= limits.outputBytes)
+    assert.equal(page.items.length, 1)
+    const [activity] = page.items
+    assert.deepEqual(activity.page_source_seqs, [event.seq])
+    consumed.push(...activity.page_source_seqs)
+    if (event === selected[0]) {
+      assert.deepEqual(activity.source_seqs, [9, 10, 12])
+      assert.deepEqual(page.page_truncated, { reason: 'output_bytes', delivered: 1, selected: selected.length })
+      assert.deepEqual(page.notices, [
+        `Page reduced to 1 of ${selected.length} events to fit outputBytes (${limits.outputBytes} bytes); continue from next_after_seq.`,
+      ])
+    }
+    if (event !== selected.at(-1)) {
+      assert.equal(activity.records.find(record => record.seq === event.seq).preview.content[0].text, text)
+      assert.equal(page.has_more, true)
+      assert.equal(page.next_after_seq, event.seq)
+    } else {
+      assert.equal(page.has_more, false)
+      assert.equal(page.next_after_seq, null)
+      assert.equal(Object.hasOwn(page, 'page_truncated'), false)
+      assert.equal(Object.hasOwn(page, 'notices'), false)
+    }
+    after_seq = page.next_after_seq
+  }
+  assert.deepEqual(consumed, selected.map(event => event.seq))
 })
 
-test('own-session cursor across a new step rejects stale provider cursor', async () => {
+test('a one-anchor page can drop previews while retaining its anchor and error evidence', async () => {
+  const stderrSummary = '中文😀'.repeat(105)
+  const events = [0, 1].map(seq => ({ seq, type: 'hook/result', data: { exitCode: 1, stderrSummary } }))
+  const query = provider({ listEvents: async () => events })
+  const args = { session_id: 'a', limit: events.length }
+  const preview = { previewChars: Array.from(stderrSummary).length }
+  const full = await run(setup(query, preview), 'session_event_list', args)
+  assert.ok(full.items[0].records[0].preview)
+  const limits = { ...preview, outputBytes: Buffer.byteLength(JSON.stringify(full.items[0])) }
+  const page = await run(setup(query, limits), 'session_event_list', args)
+  assert.ok(Buffer.byteLength(JSON.stringify(page)) <= limits.outputBytes)
+  const [activity] = page.items
+  assert.deepEqual(activity.page_source_seqs, [events[0].seq])
+  assert.equal(activity.records[0].preview, undefined)
+  assert.equal(activity.records[0].error_observed, true)
+  assert.equal(activity.records[0].error_seq, events[0].seq)
+  assert.equal(activity.truncated, true)
+  assert.equal(page.next_after_seq, events[0].seq)
+})
+
+test('an irreducible compact page directs you to metadata and raw read', async () => {
+  const limits = { outputBytes: 1100 }
+  const small = { seq: 0, type: 'user/message', data: { content: [] } }
+  const event = { seq: 1, type: 'plugin:' + 'x'.repeat(limits.outputBytes - 180), data: {} }
+  const f = setup(provider({ listEvents: async () => [small, event] }), limits)
+  const args = { session_id: 'a' }
+  const first = await run(f, 'session_event_list', args)
+  assert.deepEqual(first.items[0].page_source_seqs, [small.seq])
+  assert.equal(first.next_after_seq, small.seq)
+  const next = { ...args, after_seq: first.next_after_seq }
+  await assert.rejects(run(f, 'session_event_list', next), /use view:"metadata" to find the seq, then pass it to session_event_read/)
+  const page = await run(f, 'session_event_list', { ...next, view: 'metadata' })
+  const raw = await run(f, 'session_event_read', { ...args, seq: page.items[0].seq, view: 'raw' })
+  assert.equal(raw.event.type, event.type)
+})
+
+test('own-session search keeps its first-page filter across steps and forwards the opaque provider cursor', async () => {
+  const requests = []
+  const providerCursor = 'opaque-provider_TOKEN'
   let boundary = 3
   const f = setup(provider({ searchEvents: async request => {
-    if (request.cursor && request.filters[0].to !== 2) throw Object.assign(new Error('stale cursor'), { code: 'SESSION_QUERY_STALE_CURSOR' })
-    return { session: header('self'), items: [{ seq: 0, type: 'user/message', snippet: 'needle' }], nextCursor: 'opaque' }
+    requests.push(request)
+    return { session: header('self'), items: [{ seq: requests.length - 1, type: 'user/message', snippet: 'needle' }],
+      ...(request.cursor ? {} : { nextCursor: providerCursor }) }
   } }))
-  f.exec.agent.session.id = 'self'
-  const original = f.definitions.get('session_event_search')
-  const first = await original.execute({ session_id: 'self', query: 'needle', limit: 1 }, f.exec)
-  assert.equal(first.next_cursor, 'opaque')
-  // A new step changes the formal projection and invalidates the old provider query fingerprint.
-  boundary = 9
   f.ctx.agents.turnBoundaryOf = () => ({ lastStepStartSeq: boundary })
-  await assert.rejects(original.execute({ session_id: 'self', query: 'needle', limit: 1, cursor: first.next_cursor }, f.exec), e => e.code === 'SESSION_QUERY_STALE_CURSOR' && /no logs were scanned/i.test(e.message))
+  const args = { session_id: 'self', query: 'needle', limit: 1, surfaces: ['shadowed'] }
+  const first = await run(f, 'session_event_search', args)
+  assert.equal(first.has_more, true)
+  assert.deepEqual(requests[0].filters, [{ kind: 'seq', to: boundary - 1 }, { kind: 'surface', values: args.surfaces }])
+  boundary = 9
+  const next = await run(f, 'session_event_search', { ...args, cursor: first.next_cursor })
+  assert.deepEqual(requests[1], { ...requests[0], cursor: providerCursor })
+  assert.equal(next.items[0].seq, first.items[0].seq + 1)
+  assert.equal(next.next_cursor, null)
+  await run(f, 'session_event_search', args)
+  assert.equal(requests[2].filters[0].to, boundary - 1)
+  for (const cursor of [providerCursor, `9223372036854775807~${providerCursor}`]) {
+    await assert.rejects(run(f, 'session_event_search', { ...args, cursor }), /Invalid cursor; start a new search/)
+  }
+  assert.equal(requests.length, 3)
 })
 
 test('trace titles batch only visible nodes, deduplicate root and preserve cached flags', async () => {
@@ -521,7 +637,7 @@ test('List selects and supplements through one fixed-cut lease, never pageEvents
   const compact = await run(f, 'session_event_list', { session_id: 'a', limit: 1 })
   assert.equal(observations, 1); assert.equal(releases, 1); assert.equal(compact.captured_through_seq, 2)
   assert.equal(compact.next_after_seq, 0)
-  assert.deepEqual(compact.activities[0].page_source_seqs, [0])
+  assert.deepEqual(compact.items[0].page_source_seqs, [0])
   const metadata = await run(f, 'session_event_list', { session_id: 'a', view: 'metadata', after_seq: 0, event_types: ['user/message'], limit: 1 })
   assert.deepEqual(metadata.items, [{ seq: 1, type: 'user/message' }]); assert.equal(metadata.next_after_seq, 1)
   assert.equal(observations, 2); assert.equal(releases, 2)
@@ -541,9 +657,28 @@ test('old query engine fails clearly at plugin load', () => {
   assert.throws(() => setup(provider({ pageSessions: undefined })), /requires sessionQuery/)
   assert.throws(() => setup(provider({ observeSession: undefined })), /requires sessionQuery/)
 })
-test('event page never drops metadata records or advances a partial page', async () => {
-  const f = setup(provider({ listEvents: async () => Array.from({ length: 100 }, (_, seq) => ({ seq, type: 'turn/start', data: { turn: seq } })) }), { outputBytes: 1024 })
-  await assert.rejects(run(f, 'session_event_list', { session_id: 'a', view: 'metadata', limit: 100 }), /lower limit.*same after_seq.*no partial result/)
+test('metadata pages respect both the capped limit and the UTF-8 byte budget', async () => {
+  const limits = { pageSize: 2, maxPageSize: 3, outputBytes: 1320 }
+  const events = [0, 1, 2, 3].map(seq => ({ seq, type: 'plugin:' + '中'.repeat(130), data: {} }))
+  const f = setup(provider({ listEvents: async () => events }), limits)
+  const args = { session_id: 'a', view: 'metadata', limit: events.length }
+  const first = await run(f, 'session_event_list', args)
+  assert.ok(Buffer.byteLength(JSON.stringify(first)) <= limits.outputBytes)
+  assert.deepEqual(first.items, events.slice(0, 2).map(({ seq, type }) => ({ seq, type })))
+  assert.equal(first.requested_limit, args.limit)
+  assert.equal(first.effective_limit, limits.maxPageSize)
+  assert.equal(first.has_more, true)
+  assert.equal(first.next_after_seq, events[1].seq)
+  assert.deepEqual(first.page_truncated, { reason: 'output_bytes', delivered: first.items.length, selected: limits.maxPageSize })
+  const capNotice = `Requested limit ${args.limit} exceeds the maximum ${limits.maxPageSize}; read at most ${limits.maxPageSize} events.`
+  assert.equal(first.notices.length, 2)
+  assert.ok(first.notices.includes(capNotice))
+  const next = await run(f, 'session_event_list', { ...args, after_seq: first.next_after_seq })
+  assert.deepEqual(next.items, events.slice(first.items.length).map(({ seq, type }) => ({ seq, type })))
+  assert.equal(next.has_more, false)
+  assert.equal(next.next_after_seq, null)
+  assert.deepEqual(next.notices, [capNotice])
+  assert.equal(Object.hasOwn(next, 'page_truncated'), false)
 })
 
 test('default preparation cache reuses a one-MiB ASCII event across three pages', async () => {
@@ -575,9 +710,9 @@ test('lifecycle endpoints without intermediate coverage stay incomplete under su
   ]
   const f = setup(provider({ listEvents: async () => events }), { readSupplementalEvents: 0 })
   const page = await run(f, 'session_event_list', { session_id: 'a', event_types: ['step/start', 'step/end'], limit: 2 })
-  assert.deepEqual(page.activities[0].page_source_seqs, [0, 21])
-  assert.equal(page.activities[0].complete, false)
-  assert.ok(page.activities[0].incomplete_reasons.includes('step_coverage_unproven'))
+  assert.deepEqual(page.items[0].page_source_seqs, [0, 21])
+  assert.equal(page.items[0].complete, false)
+  assert.ok(page.items[0].incomplete_reasons.includes('step_coverage_unproven'))
   assert.equal(page.has_more, false); assert.equal(page.next_after_seq, null)
   const target = setup(provider({ listEvents: async () => [{ seq: 0, type: 'user/message', data: { content: [{ type: 'text', text: '😀'.repeat(2000) }] } }] }), { readProcessingBytes: 1024 })
   await assert.rejects(run(target, 'session_event_read', { session_id: 'a', seq: 0 }), /processing_bytes_exhausted/)

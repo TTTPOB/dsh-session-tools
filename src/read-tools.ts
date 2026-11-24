@@ -3,10 +3,10 @@ import { defineTool, type ToolRunContext } from '@deepseek-ai/dsh-tools'
 import { SessionSeq, SessionLogOffset, type SessionId } from '@deepseek-ai/dsh-session'
 import type { SessionRecord, SessionLineageNode } from '@deepseek-ai/dsh-session-query'
 import { integer, bounded, record, caller, authorize, hiddenDescendant, fitsOrThrow, type JsonValue } from './shared.js'
-import { output, scopeParam, targetParam, limitParam, call } from './definitions.js'
+import { output, eventListOutput, scopeParam, targetParam, limitParam, call } from './definitions.js'
 import { BoundedReader, commitReadingPage, type ReaderBudget } from './bounded-reader.js'
-import { associateEvents } from './event-association.js'
-import { projectTarget, projectActivity, type ProjectionBudget } from './event-projection.js'
+import { associateEvents, type AssociatedActivity } from './event-association.js'
+import { projectTarget, projectActivity, type EventProjection, type ProjectionBudget } from './event-projection.js'
 
 /** Build exact-read and trace tool definitions against public services. */
 export function readTools(ctx: Context, options: {
@@ -17,10 +17,12 @@ export function readTools(ctx: Context, options: {
   eventReadCacheEntries: number
   eventReadCacheBytes: number
   titles: (records: readonly SessionRecord[], exec: ToolRunContext, access: ReturnType<typeof caller>) => Promise<Map<string, { title: string; cached?: true }>>
-  size: (limit?: number) => number
+  pageSize: number
+  maxPageSize: number
   target: (id: string, exec: ToolRunContext, access: ReturnType<typeof caller>) => Promise<SessionId>
 }) {
-  const { outputBytes, size, target } = options
+  const { outputBytes, pageSize, maxPageSize, target } = options
+  const eventLimitParam = limitParam(pageSize, maxPageSize, 'Larger positive safe integers are capped and reported in notices.')
   const tools: Array<Parameters<typeof ctx.tools.register>[0]> = []
   type Prepared = { session: Awaited<ReturnType<typeof ctx.sessionQuery.observeSession>>['header']; capturedThroughSeq: number; points: string[]; bytes: number }
   const prepared = new Map<string, Prepared>()
@@ -33,27 +35,63 @@ export function readTools(ctx: Context, options: {
     while (prepared.size >= options.eventReadCacheEntries || cacheBytes + value.bytes > options.eventReadCacheBytes) remove(prepared.keys().next().value!)
     prepared.set(key, value); cacheBytes += value.bytes
   }
-  tools.push(defineTool({ name: 'session_event_list', description: 'Browse compact activities from a fixed Session cut. limit counts original page events, not activities; supplemental reads never advance the cursor. The same activity can repeat across pages. metadata returns exact seq/type only.', parameters: { ...targetParam, scope: scopeParam, ...limitParam, after_seq: { type: 'integer', description: 'Last consumed original seq; omit to start at zero.' }, event_types: { type: 'array', items: { type: 'string' }, description: 'Filter page anchors only; supplemental reads may use other types.' }, view: { type: 'string', enum: ['compact', 'metadata'], description: 'Default compact activity browsing.' } }, output, timeoutMs: options.readTimeoutMs, presentCall: call('List events'), async execute(args, exec) {
+  tools.push(defineTool({ name: 'session_event_list', description: 'Browse a fixed session cut. items contains activity projections in compact (default) or exact {seq, type} entries in metadata. limit counts original events, not activities. The byte budget can shorten the page; pass next_after_seq as after_seq to continue. Supplemental reads never advance that position, and an activity can recur across pages.', parameters: { ...targetParam, scope: scopeParam, ...eventLimitParam, after_seq: { type: 'integer', description: 'Last delivered original event seq; omit to start at zero.' }, event_types: { type: 'array', items: { type: 'string' }, description: 'Filter page anchors only; supplemental reads may use other types.' }, view: { type: 'string', enum: ['compact', 'metadata'], description: 'compact (default) shows activities; metadata shows exact seq and type.' } }, output: eventListOutput, timeoutMs: options.readTimeoutMs, presentCall: call('List events'), async execute(args, exec) {
     exec = { ...exec, signal: AbortSignal.any([exec.signal, AbortSignal.timeout(options.readTimeoutMs)]) }
     const access = caller(exec, args.scope); const sessionId = await target(args.session_id, exec, access)
     const after = args.after_seq === undefined ? -1 : integer(args.after_seq, 'after_seq', 0, Number.MAX_SAFE_INTEGER)
+    const view = args.view ?? 'compact'
+    const requested = args.limit ?? pageSize
+    if (!Number.isSafeInteger(requested) || requested < 1) throw new RangeError('limit must be a positive safe integer')
+    const effective = Math.min(requested, maxPageSize)
+    const cap = requested > effective ? { requested_limit: requested, effective_limit: effective } : {}
+    const capNotice = requested > effective ? [`Requested limit ${requested} exceeds the maximum ${maxPageSize}; read at most ${effective} events.`] : []
     exec.signal.throwIfAborted()
     const observation = await ctx.sessionQuery.observeSession(sessionId, { projectionMode: 'none', signal: exec.signal })
     try {
       authorize(observation.header, access)
       const reader = new BoundedReader(observation, options.readerBudget, exec.signal, options.projectionBudget)
-      const page = await reader.page(after, size(args.limit), args.event_types, args.view === 'metadata')
-      const base = { session_id: sessionId, captured_through_seq: reader.cut, has_more: page.hasMore, next_after_seq: page.nextAfterSeq }
-      if (args.view === 'metadata') return commitReadingPage({ ...base, items: page.selected.map(event => ({ seq: event.seq, type: event.type })) }, [], outputBytes)
+      const page = await reader.page(after, effective, args.event_types, view === 'metadata')
       const anchors = page.selected.map(event => event.seq)
-      await reader.completeActivities(anchors)
-      const model = associateEvents([...reader.events.values()], options.projectionBudget)
-      const selected = new Set(anchors.map(seq => model.activityBySeq.get(seq)))
-      const activities = model.activities.filter(activity => selected.has(activity)).map(activity => projectActivity(model, activity, {
-        view: 'compact', budget: options.projectionBudget, evidence: reader.evidence(activity, anchors),
-      }))
-      exec.signal.throwIfAborted()
-      return commitReadingPage({ ...base, activities }, activities, outputBytes)
+      if (view === 'compact') await reader.completeActivities(anchors)
+      const model = view === 'compact' ? associateEvents([...reader.events.values()], options.projectionBudget) : undefined
+      const overflow = 'Event list page exceeds outputBytes; use view:"metadata" to find the seq, then pass it to session_event_read (use view:"raw" for the original event).'
+      // Projection sizes may change with anchor evidence; test prefixes largest-first.
+      for (let count = anchors.length; ; count--) {
+        exec.signal.throwIfAborted()
+        const prefix = anchors.slice(0, count)
+        let projections: EventProjection[] = []
+        if (model) {
+          const byActivity = new Map<AssociatedActivity, number[]>()
+          for (const seq of prefix) {
+            const activity = model.activityBySeq.get(seq)!
+            const activityAnchors = byActivity.get(activity)
+            if (activityAnchors) activityAnchors.push(seq)
+            else byActivity.set(activity, [seq])
+          }
+          try {
+            projections = model.activities.filter(activity => byActivity.has(activity)).map(activity => projectActivity(model, activity, {
+              view: 'compact', budget: options.projectionBudget, evidence: reader.evidence(activity, byActivity.get(activity)!),
+            }))
+          } catch (error) {
+            if (!(error instanceof Error) || !error.message.startsWith('Projection metadata exceeds outputBytes;')) throw error
+            if (count > 1) continue
+            throw new Error(overflow)
+          }
+        }
+        const reduced = count < anchors.length
+        const notices = [...capNotice]
+        if (reduced) notices.push(`Page reduced to ${count} of ${anchors.length} events to fit outputBytes (${outputBytes} bytes); continue from next_after_seq.`)
+        const result = {
+          session_id: sessionId, captured_through_seq: reader.cut, view,
+          items: model ? projections : page.selected.slice(0, count).map(({ seq, type }) => ({ seq, type })),
+          has_more: reduced || page.hasMore, next_after_seq: reduced ? prefix.at(-1)! : page.nextAfterSeq,
+          ...cap, ...(reduced ? { page_truncated: { reason: 'output_bytes', delivered: count, selected: anchors.length } } : {}),
+          ...(notices.length ? { notices } : {}),
+        }
+        const json = JSON.stringify(result)
+        if (Buffer.byteLength(json, 'utf8') <= outputBytes) return JSON.parse(json) as Record<string, JsonValue>
+        if (count <= 1) return commitReadingPage(result, projections, outputBytes, overflow)
+      }
     } finally { observation[Symbol.dispose]() }
   } }))
   tools.push(defineTool({ name: 'session_event_read', description: 'Read Detail by default, scoped to the target event or its own tool pair; never expands parent, sibling or child calls. read_scope:activity explicitly expands bounded activity evidence. Compact changes density only. Explicit view:raw reads the exact requested seq, including replacements; only Raw accepts Unicode code-point offset_chars. No spill, attachment or child-session bodies are fetched.', parameters: { ...targetParam, scope: scopeParam, seq: { type: 'integer', required: true }, view: { type: 'string', enum: ['compact', 'detail', 'raw'], description: 'Default detail. Raw must be explicit.' }, read_scope: { type: 'string', enum: ['target', 'activity'], description: 'Default target. Raw rejects activity.' }, offset_chars: { type: 'integer', description: 'Raw only: Unicode code-point offset into serialized event JSON.' } }, output, timeoutMs: options.readTimeoutMs, presentCall: call('Read event'), async execute(args, exec) {
@@ -80,7 +118,7 @@ export function readTools(ctx: Context, options: {
           : projectActivity(model, activity, { view, budget: options.projectionBudget, evidence: reader.evidence(activity, [seq]) })
         exec.signal.throwIfAborted()
         const result = { session_id: sessionId, captured_through_seq: reader.cut, ...projection, requested_seq: seq }
-        return commitReadingPage(result, [result], outputBytes)
+        return commitReadingPage(result, [result], outputBytes, 'Reading metadata exceeds outputBytes; narrow read_scope or use view:"raw".')
       } finally { observation[Symbol.dispose]() }
     }
     const offset = integer(args.offset_chars, 'offset_chars', 0, Number.MAX_SAFE_INTEGER)

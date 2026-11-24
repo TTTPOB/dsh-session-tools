@@ -28,7 +28,7 @@ export function appendReadingHistory(session, children = 100) {
 }
 
 export function readingContract(page) {
-  const activity = page.activities[0]
+  const activity = page.items[0]
   const root = activity.tools[0]
   const failed = root.children.find(child => child.is_error)
   return {

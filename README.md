@@ -8,7 +8,13 @@ The plugin requires `workspaceRegistry` from `@deepseek-ai/dsh-workspace` alongs
 
 Each tool defaults to `scope: "project"`: the exact `exec.agent.session.header.cwd`, never the Host's cwd. Without a caller cwd, project scope fails; `scope: "all"` must be explicit and covers the **current sessionQuery provider's one DSH_HOME**, not multiple homes. The target is checked before cross-session reading; session search supplies the cwd filter **before** the provider query, not by trimming results afterward. Project traces hide out-of-project ancestor and descendant identities, and omit parent IDs in summary records. `all` enables cross-project reads/traces.
 
-Both searches use **only** `searchSessions` and `searchEvents` and return indexed provider cursors; no scan fallback, `maxScan`, or `filterEvents` text search exists. FTS token semantics are not arbitrary substrings. A disabled, unsupported, or failed index raises the provider's original error category plus a message that **no logs were scanned**: report it to the user, do not scan logs as a workaround. While the index is warming up, both tools preserve `SESSION_QUERY_INDEX_WARMING` and ask the caller to retry later; no logs were scanned. Neither tool retries a failed provider request. `session_search` excludes its own session by default (`include_current: true` opts in). It also excludes archived sessions by default; set `include_archived: true` only when archived work is specifically needed. Each cross-session search item includes an `archived` boolean from the current Workspace registry. This is a discovery filter, not an access restriction: listing, exact reads, event search, and traces keep their existing behavior. `session_event_search` on its own session excludes the executing `step/start` and later events. Search results expose `items`, `has_more`, `next_cursor` (opaque or null). `snippet` is always an excerpt, not the full event text; `snippet_truncated` only indicates additional shortening of the provider's excerpt by this plugin. Each tool calls its indexed provider exactly once per request, passing the validated `limit` (default 30, maximum `maxPageSize: 100`). The tool filters one provider page without refilling it; excluding the current or archived sessions may yield a short or empty page with `has_more: true` and its original `next_cursor`. Continue with that cursor rather than expecting the tool to refill the page. The token is a provider cursor, not a result count. Keep query, scope, limit, include_current, and include_archived unchanged across requests; provider generations can invalidate a cursor after live session updates. For current-session eve... (line truncated to 2000 chars)
+Both searches use **only** `searchSessions` and `searchEvents`. FTS matches tokens, not arbitrary substrings. Neither search retries a failed provider request or scans logs as a fallback. Index failures preserve the provider's error category and state that no logs were scanned; report them to the user. `SESSION_QUERY_INDEX_WARMING` asks the caller to retry later.
+
+`session_search` excludes its own session by default (`include_current: true` opts in). It also excludes archived sessions by default; set `include_archived: true` only when archived work is specifically needed. Each item includes the Workspace registry's `archived` flag; this discovery filter does not limit exact access.
+
+Search results expose `items`, `has_more`, and `next_cursor` (opaque or null). `snippet` is an excerpt; `snippet_truncated` marks additional shortening by this plugin. Each search page queries the index at most once and does not refill filtered results: `session_search` can return an empty `items` with `has_more: true`. Continue using `next_cursor`, keeping the request parameters unchanged. The provider may still invalidate a cursor when its index changes.
+
+When you search your own session with `session_event_search`, every page excludes the step executing the first request and all later events. Use `next_cursor` unchanged even after a new step starts. To search through a newer step boundary, start a new search without a cursor.
 
 `session_event_search` accepts optional `surfaces: ["current", "shadowed", "log-only"]`. Omission searches existing indexed documents across all three surfaces; an explicit nonempty array selects surfaces with OR semantics. `current` identifies events still in the folded message surface, `shadowed` identifies messages covered by replacements, and `log-only` identifies other log events such as ordinary tool calls and todos. The provider applies this metadata filter before ranking and pagination, ANDed with the current-session seq ceiling. Keep query, scope, limit and surfaces unchanged on continuation. Hits retain provider order and return `seq`, `type`, `time`, `surface`, `snippet`, `snippet_truncated`, and `read_seq` equal to `seq`. Pass `read_seq` to `session_event_read` for Detail or Raw; search does not read activities for each hit.
 
@@ -18,7 +24,9 @@ Search covers the existing extractor rules: user/assistant messages, ordinary to
 
 ## 事件读取
 
-`session_event_list` 默认 Compact，返回 `activities`、`captured_through_seq`、`has_more` 与 `next_after_seq`；显式 `view: "metadata"` 返回 `items` 中的精确 seq/type。省略 `after_seq` 从 0 开始，EOF 是空页、false 与 null。`limit` 计数本页原始事件，不计合并后的活动数。`event_types` 只筛选分页锚点，不过滤解释锚点时补读的调用、结果、阶段边界等类型。仅确认 cut 内还有匹配事件时才返回最后页内 seq 作为 `next_after_seq`；补读不推进 cursor，同一活动可以跨页重复。
+`session_event_list` 在两种视图都返回 `items`，并回显 `view`：默认 `compact` 展示活动投影；`metadata` 展示精确的 `{seq, type}`。省略 `after_seq` 从 0 开始；`has_more: false` 与 `next_after_seq: null` 表示没有下一页。`limit` 计数本页选取的原始事件，不计活动；大于 `maxPageSize` 的正安全整数按上限执行，并返回 `requested_limit`、`effective_limit` 和 `notices`。其它工具拒绝超过 `maxPageSize` 的 `limit`。
+
+`event_types` 只筛选分页锚点，不限制补读的类型。`has_more: true` 时，把 `next_after_seq` 用作下一页的 `after_seq`。它指向最后交付的锚点；补读不推进翻页，同一活动可以跨页重复。
 
 活动包含 `activity_id`、`records`、`tools`、`source_seqs` 和 `page_source_seqs`。`source_seqs` 列出实际使用的证据，`page_source_seqs` 仅列本页消费的原事件。`complete` 按请求范围及覆盖证据判断，`incomplete_reasons` 描述未读齐的关系；`truncated` 独立表示展示裁剪。已知错误存在、错误 seq 和调用身份不因省略正文而丢失。未观察到结果不能解释为仍在运行或日志中不存在。
 
@@ -52,7 +60,9 @@ Raw 缓存仅保存同 provider/session/原 seq 的已准备 code points 与 cap
 | `projectionDepth / projectionNodes` | 8 / 512 | 展示字段、工具树深度与节点访问上界 |
 | `eventReadCacheEntries / eventReadCacheBytes` | 8 / 67108864 | Raw 已准备片段缓存条数/估算内存 bytes |
 
-补读超数量、处理或跨度预算时保留不完整证据，不据此声称 EOF；主锚点不能进入处理预算则明确失败，调用方可缩小页或显式 Raw。完整阶段要求真实首尾与中间每条原记录均已取得，并补齐必要明确引用。整页预算包含 wrapper、pagination、身份、错误和所有活动；预览可省略并标记 truncated，但最小完整页仍不 fit 就报错，不返回部分页或跳记录 cursor。List 可降低 limit 后从相同 after_seq 重试；索引搜索或 session list 降低 limit 后应不带旧 cursor 重启。
+补读超数量、处理或跨度预算时保留不完整证据，不据此声称 EOF；主锚点不能进入处理预算则明确失败，调用方可缩小页或显式 Raw。完整阶段要求真实首尾与中间每条原记录均已取得，并补齐必要的明确引用。
+
+整页输出预算 `outputBytes` 按包装后的 JSON UTF-8 字节数计算。事件列表优先缩短锚点前缀以保留预览；缩页返回 `page_truncated: { reason: "output_bytes", delivered, selected }` 和 `notices`，即使原本是最后一页，也用 `has_more: true` 和最后交付的 `next_after_seq` 继续。若单锚点仍超限，才从整页省略可选预览字段；仍放不下时，用 `view: "metadata"` 找到 seq，再用 `session_event_read` 读取该事件。索引搜索或 `session_list` 超预算仍报错，降低 `limit` 后不带旧 cursor 重启。
 
 ## 分页快照与追踪
 
@@ -90,7 +100,7 @@ reader 可传入 `options.evidence.pageSourceSeqs`、`coverageComplete`、`incom
 
 [src/bounded-reader.ts](src/bounded-reader.ts) 的 `BoundedReader` 借用调用方拥有的单个 `SessionObservation`，只经 `readEvents` 扫描固定 cut，不访问 `.events`。`page` 用原事件数选择锚点并确认是否还有匹配类型；`completeTarget` 只补目标工具对，`completeActivities` 有界读取页内活动附近记录及明确引用。补读数量、处理 bytes、seq 跨度和扫描 batch 分别由 `ReaderBudget` 控制，限额耗尽保留缺口，取消明确报错。活动完整性需要真实生命周期首尾与中间每条记录均已取得，并检查明确引用；只有工具配对或首尾边界不能证明 Step 完整。
 
-`commitReadingPage` 对最终整页包装 JSON 执行 UTF-8 `outputBytes`，预算不足时省略已有限预览，保留身份、关系、已知错误、分页锚点；最小完整元数据仍放不下则报错，不提交部分页或 cursor。默认读取预算不承诺任意跨度完整。
+列表根据交付的锚点前缀重新投影，再检查最终 JSON 的 UTF-8 字节数。`commitReadingPage` 为单锚点列表或语义读取省略可选字段，保留身份、关系、错误事实和定位信息；仍超预算时报错。默认读取预算不承诺任意跨度完整。
 
 ## Development
 
