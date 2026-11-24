@@ -191,7 +191,7 @@ export function apply(ctx: Context, config: Config): void {
       outputBytes, size, target, titles, readTimeoutMs: config.readTimeoutMs,
       readerBudget: { readBatchSize: config.readBatchSize, supplementalEvents: config.readSupplementalEvents,
         processingBytes: config.readProcessingBytes, seqSpan: config.readSeqSpan },
-      projectionBudget: { maxStringChars: config.projectionStringChars, maxItems: config.projectionItems,
+      projectionBudget: { maxStringChars: config.projectionStringChars, maxPreviewChars: previewChars, maxItems: config.projectionItems,
         maxDepth: config.projectionDepth, maxNodes: config.projectionNodes, outputBytes },
       eventReadCacheEntries: config.eventReadCacheEntries, eventReadCacheBytes: config.eventReadCacheBytes,
     })

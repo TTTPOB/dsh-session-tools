@@ -36,6 +36,7 @@ function projectionStrategy(type: string): string {
 /** Caller-owned display limits; calibrated defaults live in Config. */
 export interface ProjectionBudget {
   maxStringChars: number
+  maxPreviewChars: number
   maxItems: number
   maxDepth: number
   maxNodes: number
@@ -149,8 +150,14 @@ function previewFields(event: ReadingEvent, view: ProjectionOptions['view'], mes
   const strategy = projectionStrategy(event.type)
   if (strategy === 'message') {
     const content = event.type === 'user/message' ? d.content : message.content
-    const source = event.type === 'user/message' ? d.source : message.source
-    return { role: event.type === 'user/message' ? d.role : message.role, source, content: messagePreview, empty: Array.isArray(content) && content.length === 0,
+    const originalSource = fields(event.type === 'user/message' ? d.source : message.source)
+    const source: Record<string, string> = {}
+    for (const key of ['kind', 'provider', 'model']) {
+      const value = originalSource[key]
+      if (typeof value === 'string') source[key] = value
+    }
+    return { role: event.type === 'user/message' ? d.role : message.role, ...(Object.keys(source).length ? { source } : {}),
+      content: messagePreview, empty: Array.isArray(content) && content.length === 0,
       interrupted: d.interrupted, usage: view === 'detail' ? d.usage : undefined,
       ...toolDefinitions === undefined ? {} : { tools: toolDefinitions } }
   }
@@ -207,9 +214,11 @@ function project(model: EventAssociation, events: readonly ReadingEvent[], tools
     page_source_seqs: [], records: [], tools: [], complete: false, incomplete_reasons: [], truncated: false }
   const sourceSeqs = new Set<number>()
   const reasons = new Set([...(options.evidence?.incompleteReasons ?? []), ...(activity?.toolGaps ?? [])])
+  const previewBudget = options.view === 'compact'
+    ? { ...options.budget, maxStringChars: options.budget.maxPreviewChars } : options.budget
   const addPreview = (value: unknown, set: (value: Json) => void, remove: () => void) => {
     if (value === undefined) return
-    const bounded = bound(value, options.budget)
+    const bounded = bound(value, previewBudget)
     output.truncated ||= bounded.truncated
     set(bounded.value)
     omitted.push(remove)

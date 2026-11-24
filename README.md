@@ -39,7 +39,7 @@ Raw 缓存仅保存同 provider/session/原 seq 的已准备 code points 与 cap
 | 字段 | 默认值 | 控制内容 |
 |---|---:|---|
 | `pageSize / maxPageSize` | 30 / 100 | 原事件页大小；pageSize 不超过 maxPageSize |
-| `previewChars` | 240 | 搜索 snippet 与标题预览 |
+| `previewChars` | 240 | 搜索 snippet、标题预览与 compact 事件预览中每个字符串的 Unicode code-point 上限 |
 | `outputBytes` | 24576 | 最终整页包装 JSON UTF-8 bytes，最少 1024 |
 | `searchTimeoutMs` | 30000 | 搜索工具 timeout 元数据，沿用既有执行管线 |
 | `readTimeoutMs` | 30000 | List/Read 执行内与 caller signal 组合的实际 deadline |
@@ -47,7 +47,7 @@ Raw 缓存仅保存同 provider/session/原 seq 的已准备 code points 与 cap
 | `readSupplementalEvents` | 1024 | 主锚点之外保留的补读事件数量 |
 | `readProcessingBytes` | 8388608 | 保留证据的保守处理 bytes 估算，访问受限后才构造展示 |
 | `readSeqSpan` | 4096 | 每个锚点附近与明确引用的最大 seq 距离 |
-| `projectionStringChars` | 2000 | 每个展示字符串的 Unicode code-point 上界 |
+| `projectionStringChars` | 2000 | detail 事件预览中每个字符串的 Unicode code-point 上限 |
 | `projectionItems` | 32 | 展示集合与助手调用块访问上界 |
 | `projectionDepth / projectionNodes` | 8 / 512 | 展示字段、工具树深度与节点访问上界 |
 | `eventReadCacheEntries / eventReadCacheBytes` | 8 / 67108864 | Raw 已准备片段缓存条数/估算内存 bytes |

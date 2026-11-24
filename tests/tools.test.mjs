@@ -309,15 +309,62 @@ test('complete list and search output budgets count cached flags', async () => {
   await assert.rejects(run(limitedSearch, 'session_search', { query: 'hit' }), /no partial result/)
 })
 test('filtered compact previews read original fields with Unicode limits, not index extraction', async () => {
+  const text = '中文😀测试更多字符终'
+  const limits = { previewChars: 8 }
   const f = setup(provider({
-    listEvents: async () => [0, 1, 2, 3, 4].map(seq => ({ seq, type: seq % 2 ? 'user/message' : 'turn/start', data: seq % 2 ? { content: [{ type: 'text', text: '中文😀测试更多字符终' }] } : { turn: seq } })),
+    listEvents: async () => [0, 1, 2, 3, 4].map(seq => ({ seq, type: seq % 2 ? 'user/message' : 'turn/start', data: seq % 2 ? { content: [{ type: 'text', text }] } : { turn: seq } })),
     filterEvents() { throw new Error('index text is not reading evidence') },
-  }), { projectionStringChars: 8 })
+  }), limits)
   const page = await run(f, 'session_event_list', { session_id: 'a', event_types: ['user/message'], limit: 2 })
   assert.deepEqual(page.activities.flatMap(x => x.page_source_seqs), [1, 3])
-  assert.equal(page.activities[0].records[0].preview.content[0].text, '中文😀测试更多字')
+  assert.equal(page.activities[0].records[0].preview.content[0].text, Array.from(text).slice(0, limits.previewChars).join(''))
   assert.equal(page.activities[0].truncated, true); assert.equal(page.has_more, false)
   assert.equal(page.next_after_seq, null)
+})
+
+test('message previews keep only string source identity fields while raw keeps replay state', async () => {
+  const identity = { kind: 'model', provider: 'test-provider', model: 'test-model' }
+  const source = { ...identity, replayState: { responseId: 'test-response', encrypted_content: 'test-signature' }, route: 'extra-field' }
+  const content = [{ type: 'text', text: 'Message content' }]
+  const events = [
+    { seq: 0, type: 'assistant/message', surfaceOp: 'append', data: { message: { role: 'assistant', source, content } } },
+    { seq: 1, type: 'user/message', surfaceOp: 'append', data: { role: 'user', source: { kind: 42, provider: true, model: null }, content } },
+  ]
+  const f = setup(provider({ listEvents: async () => events }))
+  const compact = await run(f, 'session_event_list', { session_id: 'a' })
+  const compactRecords = compact.activities.flatMap(activity => activity.records)
+  const detailRecords = []
+  for (const { seq } of events) {
+    const detail = await run(f, 'session_event_read', { session_id: 'a', seq, view: 'detail' })
+    detailRecords.push(detail.records[0])
+  }
+  for (const records of [compactRecords, detailRecords]) {
+    const assistant = records.find(record => record.seq === 0)
+    assert.deepEqual(assistant.preview.source, identity)
+    assert.equal(assistant.source_kind, identity.kind)
+    assert.equal(Object.hasOwn(records.find(record => record.seq === 1).preview, 'source'), false)
+  }
+  const raw = await run(f, 'session_event_read', { session_id: 'a', seq: 0, view: 'raw' })
+  assert.deepEqual(raw.event.data.message.source, source)
+})
+
+test('tool result previews use the configured Unicode string limit for each view', async () => {
+  const limits = { previewChars: 19, projectionStringChars: 43 }
+  const text = '工具😀 result! '.repeat(10)
+  const callId = 'example-call'
+  const events = [
+    { seq: 0, type: 'tool/call', data: { callId, name: 'example' } },
+    { seq: 1, type: 'tool/result', surfaceOp: 'append', sourceEventSeqs: [0], data: {
+      message: { role: 'tool', source: { kind: 'tool', callId }, toolCallId: callId, isError: false, content: [{ type: 'text', text }] },
+    } },
+  ]
+  const f = setup(provider({ listEvents: async () => events }), limits)
+  const compact = await run(f, 'session_event_list', { session_id: 'a' })
+  const detail = await run(f, 'session_event_read', { session_id: 'a', seq: 1, view: 'detail' })
+  for (const [projection, limit] of [[compact.activities[0], limits.previewChars], [detail, limits.projectionStringChars]]) {
+    assert.equal(projection.tools[0].result[0].text, Array.from(text).slice(0, limit).join(''))
+    assert.equal(projection.truncated, true)
+  }
 })
 
 test('current-session search ANDs surface OR selection with the seq ceiling before provider ranking', async () => {

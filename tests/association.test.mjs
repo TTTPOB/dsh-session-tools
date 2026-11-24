@@ -233,7 +233,7 @@ test('rc.1 jobs, working-directory changes and plugin records preserve bounded f
 test('bounded previews never serialize original huge objects and final UTF-8 budget preserves errors and seqs', () => {
   const huge = { x: '😀'.repeat(1000000), toJSON() { throw new Error('original must not be stringified') } }
   const local = associate([{ seq: 1, type: 'extension/accepted', data: huge }])
-  const tiny = projectTarget(local, 1, { ...compact, budget: { ...compact.budget, maxStringChars: 2, outputBytes: 1000 } })
+  const tiny = projectTarget(local, 1, { ...compact, budget: { ...compact.budget, maxPreviewChars: 2, outputBytes: 1000 } })
   assert.equal(tiny.records[0].preview.x, '😀😀')
   assert.equal(tiny.truncated, true)
   assert.ok(Buffer.byteLength(JSON.stringify(tiny), 'utf8') <= 1000)

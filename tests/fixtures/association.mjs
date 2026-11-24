@@ -77,5 +77,5 @@ export function guardedBlocks(blocks, limit) {
   return { content, get visits() { return visits } }
 }
 
-export const compact = { view: 'compact', budget: { maxStringChars: 32, maxItems: 8, maxDepth: 5, maxNodes: 100, outputBytes: 30000 } }
-export const detail = { view: 'detail', budget: { maxStringChars: 256, maxItems: 16, maxDepth: 8, maxNodes: 300, outputBytes: 50000 } }
+export const compact = { view: 'compact', budget: { maxStringChars: 256, maxPreviewChars: 32, maxItems: 8, maxDepth: 5, maxNodes: 100, outputBytes: 30000 } }
+export const detail = { view: 'detail', budget: { maxStringChars: 256, maxPreviewChars: 32, maxItems: 16, maxDepth: 8, maxNodes: 300, outputBytes: 50000 } }
