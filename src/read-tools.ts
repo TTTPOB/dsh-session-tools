@@ -55,8 +55,8 @@ export function readTools(ctx: Context, options: {
       if (view === 'compact') await reader.completeActivities(anchors)
       const model = view === 'compact' ? associateEvents([...reader.events.values()], options.projectionBudget) : undefined
       const overflow = 'Event list page exceeds outputBytes; use view:"metadata" to find the seq, then pass it to session_event_read (use view:"raw" for the original event).'
-      // Projection sizes may change with anchor evidence; test prefixes largest-first.
-      for (let count = anchors.length; ; count--) {
+      // Builds the page for an anchor prefix; projections are recomputed because evidence depends on the prefix.
+      const build = (count: number) => {
         exec.signal.throwIfAborted()
         const prefix = anchors.slice(0, count)
         let projections: EventProjection[] = []
@@ -74,8 +74,7 @@ export function readTools(ctx: Context, options: {
             }))
           } catch (error) {
             if (!(error instanceof Error) || !error.message.startsWith('Projection metadata exceeds outputBytes;')) throw error
-            if (count > 1) continue
-            throw new Error(overflow)
+            return undefined
           }
         }
         const reduced = count < anchors.length
@@ -89,9 +88,21 @@ export function readTools(ctx: Context, options: {
           ...(notices.length ? { notices } : {}),
         }
         const json = JSON.stringify(result)
-        if (Buffer.byteLength(json, 'utf8') <= outputBytes) return JSON.parse(json) as Record<string, JsonValue>
-        if (count <= 1) return commitReadingPage(result, projections, outputBytes, overflow)
+        return { result, projections, json, fits: Buffer.byteLength(json, 'utf8') <= outputBytes }
       }
+      const full = build(anchors.length)
+      if (full?.fits) return JSON.parse(full.json) as Record<string, JsonValue>
+      // Page size grows with the prefix, so binary search finds the longest prefix that fits.
+      let best: ReturnType<typeof build>
+      for (let low = 1, high = anchors.length - 1; low <= high;) {
+        const count = Math.floor((low + high) / 2)
+        const candidate = build(count)
+        if (candidate?.fits) { best = candidate; low = count + 1 } else high = count - 1
+      }
+      if (best) return JSON.parse(best.json) as Record<string, JsonValue>
+      const single = anchors.length > 1 ? build(1) : full
+      if (!single) throw new Error(overflow)
+      return commitReadingPage(single.result, single.projections, outputBytes, overflow)
     } finally { observation[Symbol.dispose]() }
   } }))
   tools.push(defineTool({ name: 'session_event_read', description: 'Read Detail by default, scoped to the target event or its own tool pair; never expands parent, sibling or child calls. read_scope:activity explicitly expands bounded activity evidence. Compact changes density only. Explicit view:raw reads the exact requested seq, including replacements; only Raw accepts Unicode code-point offset_chars. No spill, attachment or child-session bodies are fetched.', parameters: { ...targetParam, scope: scopeParam, seq: { type: 'integer', required: true }, view: { type: 'string', enum: ['compact', 'detail', 'raw'], description: 'Default detail. Raw must be explicit.' }, read_scope: { type: 'string', enum: ['target', 'activity'], description: 'Default target. Raw rejects activity.' }, offset_chars: { type: 'integer', description: 'Raw only: Unicode code-point offset into serialized event JSON.' } }, output, timeoutMs: options.readTimeoutMs, presentCall: call('Read event'), async execute(args, exec) {

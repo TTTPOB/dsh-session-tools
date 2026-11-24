@@ -181,7 +181,7 @@ export function apply(ctx: Context, config: Config): void {
           if (boundary === 0) return { session_id: sessionId, items: [], has_more: false, next_cursor: null }
           cut = boundary - 1
         } else {
-          // The provider uses base64url cursors; ~ separates the pinned cut without decoding its token.
+          // Provider cursors never contain ~, so it separates the pinned cut without decoding the provider token.
           const parts = /^(0|[1-9]\d*)~([^~]+)$/.exec(cursor)
           if (!parts || !Number.isSafeInteger(Number(parts[1]))) throw new Error('Invalid cursor; start a new search without a cursor.')
           cut = Number(parts[1])
