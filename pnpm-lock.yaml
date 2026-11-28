@@ -6,8 +6,8 @@ settings:
 
 overrides:
   '@deepseek-ai/dsh-session': https://github.com/TTTPOB/deepseek-harness/releases/download/daily-driver-v0.2.2-rc.5-fork1/deepseek-ai-dsh-session-0.2.2-rc.5-fork1.tgz
-  '@deepseek-ai/dsh-session-query': https://github.com/TTTPOB/deepseek-harness/releases/download/daily-driver-v0.2.2-rc.5-fork1/deepseek-ai-dsh-session-query-0.2.2-rc.5-fork1.tgz
-  '@deepseek-ai/dsh-session-query-sqlite': https://github.com/TTTPOB/deepseek-harness/releases/download/daily-driver-v0.2.2-rc.5-fork1/deepseek-ai-dsh-session-query-sqlite-0.2.2-rc.5-fork1.tgz
+  '@deepseek-ai/dsh-session-query': https://github.com/TTTPOB/deepseek-harness/releases/download/daily-driver-v0.2.2-rc.5-fork8/deepseek-ai-dsh-session-query-0.2.2-rc.5-fork3.tgz
+  '@deepseek-ai/dsh-session-query-sqlite': https://github.com/TTTPOB/deepseek-harness/releases/download/daily-driver-v0.2.2-rc.5-fork8/deepseek-ai-dsh-session-query-sqlite-0.2.2-rc.5-fork3.tgz
   '@deepseek-ai/dsh-session-persistence-jsonl': https://github.com/TTTPOB/deepseek-harness/releases/download/daily-driver-v0.2.2-rc.5-fork1/deepseek-ai-dsh-session-persistence-jsonl-0.2.2-rc.5-fork1.tgz
 
 importers:
@@ -18,8 +18,8 @@ importers:
         specifier: https://github.com/TTTPOB/deepseek-harness/releases/download/daily-driver-v0.2.2-rc.5-fork1/deepseek-ai-dsh-session-0.2.2-rc.5-fork1.tgz
         version: https://github.com/TTTPOB/deepseek-harness/releases/download/daily-driver-v0.2.2-rc.5-fork1/deepseek-ai-dsh-session-0.2.2-rc.5-fork1.tgz(@deepseek-ai/cordis@4.1.0)(@deepseek-ai/dsh-error@0.2.2-rc.5(@deepseek-ai/cordis@4.1.0))(@deepseek-ai/dsh-scope@0.2.2-rc.5(@deepseek-ai/cordis@4.1.0))
       '@deepseek-ai/dsh-session-query':
-        specifier: https://github.com/TTTPOB/deepseek-harness/releases/download/daily-driver-v0.2.2-rc.5-fork1/deepseek-ai-dsh-session-query-0.2.2-rc.5-fork1.tgz
-        version: https://github.com/TTTPOB/deepseek-harness/releases/download/daily-driver-v0.2.2-rc.5-fork1/deepseek-ai-dsh-session-query-0.2.2-rc.5-fork1.tgz(d0a401ee52c5e9ac20ade151dd47bcd1)
+        specifier: https://github.com/TTTPOB/deepseek-harness/releases/download/daily-driver-v0.2.2-rc.5-fork8/deepseek-ai-dsh-session-query-0.2.2-rc.5-fork3.tgz
+        version: https://github.com/TTTPOB/deepseek-harness/releases/download/daily-driver-v0.2.2-rc.5-fork8/deepseek-ai-dsh-session-query-0.2.2-rc.5-fork3.tgz(d0a401ee52c5e9ac20ade151dd47bcd1)
       '@deepseek-ai/schemastery':
         specifier: 3.19.0
         version: 3.19.0
@@ -46,8 +46,8 @@ importers:
         specifier: https://github.com/TTTPOB/deepseek-harness/releases/download/daily-driver-v0.2.2-rc.5-fork1/deepseek-ai-dsh-session-persistence-jsonl-0.2.2-rc.5-fork1.tgz
         version: https://github.com/TTTPOB/deepseek-harness/releases/download/daily-driver-v0.2.2-rc.5-fork1/deepseek-ai-dsh-session-persistence-jsonl-0.2.2-rc.5-fork1.tgz(7964a7602e1cface77a84f39901d4ca6)
       '@deepseek-ai/dsh-session-query-sqlite':
-        specifier: https://github.com/TTTPOB/deepseek-harness/releases/download/daily-driver-v0.2.2-rc.5-fork1/deepseek-ai-dsh-session-query-sqlite-0.2.2-rc.5-fork1.tgz
-        version: https://github.com/TTTPOB/deepseek-harness/releases/download/daily-driver-v0.2.2-rc.5-fork1/deepseek-ai-dsh-session-query-sqlite-0.2.2-rc.5-fork1.tgz(42018b038258251ab5ef44236fe5497c)
+        specifier: https://github.com/TTTPOB/deepseek-harness/releases/download/daily-driver-v0.2.2-rc.5-fork8/deepseek-ai-dsh-session-query-sqlite-0.2.2-rc.5-fork3.tgz
+        version: https://github.com/TTTPOB/deepseek-harness/releases/download/daily-driver-v0.2.2-rc.5-fork8/deepseek-ai-dsh-session-query-sqlite-0.2.2-rc.5-fork3.tgz(3325b37015987767bf164707fca61417)
       '@deepseek-ai/dsh-shell-env':
         specifier: 0.2.2-rc.5
         version: 0.2.2-rc.5(6d1d9d2bdce8b8a22adb4f09f09bdab2)
@@ -342,24 +342,24 @@ packages:
       '@deepseek-ai/cordis': ~4.1.0
       '@deepseek-ai/dsh-session': 0.2.2-rc.5
 
-  '@deepseek-ai/dsh-session-query-sqlite@https://github.com/TTTPOB/deepseek-harness/releases/download/daily-driver-v0.2.2-rc.5-fork1/deepseek-ai-dsh-session-query-sqlite-0.2.2-rc.5-fork1.tgz':
-    resolution: {integrity: sha512-H3zEqW2tF0m6LDGPtyMnpaRz2tJOhpNuDmtf2cXxGtfijo8Ne50KDE7I/iBdPFZnganZAHhw7Q91Q2a4vr2+Lg==, tarball: https://github.com/TTTPOB/deepseek-harness/releases/download/daily-driver-v0.2.2-rc.5-fork1/deepseek-ai-dsh-session-query-sqlite-0.2.2-rc.5-fork1.tgz}
-    version: 0.2.2-rc.5-fork1
+  '@deepseek-ai/dsh-session-query-sqlite@https://github.com/TTTPOB/deepseek-harness/releases/download/daily-driver-v0.2.2-rc.5-fork8/deepseek-ai-dsh-session-query-sqlite-0.2.2-rc.5-fork3.tgz':
+    resolution: {integrity: sha512-3rCjF37W126fyjC94n0nh4tKFEsHHkfPy6hBUibLZdzOSkxW1LQwlb2K4dWfKZ0xwB3RKUZgeCNCMtPwFU/h6Q==, tarball: https://github.com/TTTPOB/deepseek-harness/releases/download/daily-driver-v0.2.2-rc.5-fork8/deepseek-ai-dsh-session-query-sqlite-0.2.2-rc.5-fork3.tgz}
+    version: 0.2.2-rc.5-fork3
     peerDependencies:
       '@deepseek-ai/cordis': ~4.1.0
       '@deepseek-ai/dsh-session': 0.2.2-rc.5-fork1
       '@deepseek-ai/dsh-session-persistence': 0.2.2-rc.5
       '@deepseek-ai/dsh-session-persistence-jsonl': 0.2.2-rc.5-fork1
-      '@deepseek-ai/dsh-session-query': 0.2.2-rc.5-fork1
+      '@deepseek-ai/dsh-session-query': 0.2.2-rc.5-fork3
     peerDependenciesMeta:
       '@deepseek-ai/dsh-session-persistence':
         optional: true
       '@deepseek-ai/dsh-session-persistence-jsonl':
         optional: true
 
-  '@deepseek-ai/dsh-session-query@https://github.com/TTTPOB/deepseek-harness/releases/download/daily-driver-v0.2.2-rc.5-fork1/deepseek-ai-dsh-session-query-0.2.2-rc.5-fork1.tgz':
-    resolution: {integrity: sha512-8zp2fEFh3BkA5qMRllpuXKznL5nMWi8nS3dehQIQgESfe4+kKqfJqHQDkkq7lMiFgvvLdBLkDJeIR5gyiuHFUQ==, tarball: https://github.com/TTTPOB/deepseek-harness/releases/download/daily-driver-v0.2.2-rc.5-fork1/deepseek-ai-dsh-session-query-0.2.2-rc.5-fork1.tgz}
-    version: 0.2.2-rc.5-fork1
+  '@deepseek-ai/dsh-session-query@https://github.com/TTTPOB/deepseek-harness/releases/download/daily-driver-v0.2.2-rc.5-fork8/deepseek-ai-dsh-session-query-0.2.2-rc.5-fork3.tgz':
+    resolution: {integrity: sha512-Tm28tfCOPS0AMbZQg0zgVV8zAHRbJrqBhRMwjljCtfHCf4PmBVtBDtXZvL1aWY04UWZR2xtq8g9fBYH1PPJngw==, tarball: https://github.com/TTTPOB/deepseek-harness/releases/download/daily-driver-v0.2.2-rc.5-fork8/deepseek-ai-dsh-session-query-0.2.2-rc.5-fork3.tgz}
+    version: 0.2.2-rc.5-fork3
     peerDependencies:
       '@deepseek-ai/cordis': ~4.1.0
       '@deepseek-ai/dsh-brand': 0.2.2-rc.5
@@ -1086,17 +1086,17 @@ snapshots:
       '@deepseek-ai/dsh-session': https://github.com/TTTPOB/deepseek-harness/releases/download/daily-driver-v0.2.2-rc.5-fork1/deepseek-ai-dsh-session-0.2.2-rc.5-fork1.tgz(@deepseek-ai/cordis@4.1.0)(@deepseek-ai/dsh-error@0.2.2-rc.5(@deepseek-ai/cordis@4.1.0))(@deepseek-ai/dsh-scope@0.2.2-rc.5(@deepseek-ai/cordis@4.1.0))
       zod: 4.6.6
 
-  '@deepseek-ai/dsh-session-query-sqlite@https://github.com/TTTPOB/deepseek-harness/releases/download/daily-driver-v0.2.2-rc.5-fork1/deepseek-ai-dsh-session-query-sqlite-0.2.2-rc.5-fork1.tgz(42018b038258251ab5ef44236fe5497c)':
+  '@deepseek-ai/dsh-session-query-sqlite@https://github.com/TTTPOB/deepseek-harness/releases/download/daily-driver-v0.2.2-rc.5-fork8/deepseek-ai-dsh-session-query-sqlite-0.2.2-rc.5-fork3.tgz(3325b37015987767bf164707fca61417)':
     dependencies:
       '@deepseek-ai/cordis': 4.1.0(@deepseek-ai/cordis-plugin-include@1.1.0)(@deepseek-ai/cordis-plugin-loader@1.1.0)
       '@deepseek-ai/dsh-session': https://github.com/TTTPOB/deepseek-harness/releases/download/daily-driver-v0.2.2-rc.5-fork1/deepseek-ai-dsh-session-0.2.2-rc.5-fork1.tgz(@deepseek-ai/cordis@4.1.0)(@deepseek-ai/dsh-error@0.2.2-rc.5(@deepseek-ai/cordis@4.1.0))(@deepseek-ai/dsh-scope@0.2.2-rc.5(@deepseek-ai/cordis@4.1.0))
-      '@deepseek-ai/dsh-session-query': https://github.com/TTTPOB/deepseek-harness/releases/download/daily-driver-v0.2.2-rc.5-fork1/deepseek-ai-dsh-session-query-0.2.2-rc.5-fork1.tgz(d0a401ee52c5e9ac20ade151dd47bcd1)
+      '@deepseek-ai/dsh-session-query': https://github.com/TTTPOB/deepseek-harness/releases/download/daily-driver-v0.2.2-rc.5-fork8/deepseek-ai-dsh-session-query-0.2.2-rc.5-fork3.tgz(d0a401ee52c5e9ac20ade151dd47bcd1)
       '@deepseek-ai/schemastery': 3.19.0
     optionalDependencies:
       '@deepseek-ai/dsh-session-persistence': 0.2.2-rc.5(@deepseek-ai/cordis@4.1.0)(@deepseek-ai/dsh-brand@0.2.2-rc.5(@deepseek-ai/cordis@4.1.0))(@deepseek-ai/dsh-session@https://github.com/TTTPOB/deepseek-harness/releases/download/daily-driver-v0.2.2-rc.5-fork1/deepseek-ai-dsh-session-0.2.2-rc.5-fork1.tgz(@deepseek-ai/cordis@4.1.0)(@deepseek-ai/dsh-error@0.2.2-rc.5(@deepseek-ai/cordis@4.1.0))(@deepseek-ai/dsh-scope@0.2.2-rc.5(@deepseek-ai/cordis@4.1.0)))(@deepseek-ai/dsh-timeout@0.2.2-rc.5(@deepseek-ai/cordis@4.1.0))
       '@deepseek-ai/dsh-session-persistence-jsonl': https://github.com/TTTPOB/deepseek-harness/releases/download/daily-driver-v0.2.2-rc.5-fork1/deepseek-ai-dsh-session-persistence-jsonl-0.2.2-rc.5-fork1.tgz(7964a7602e1cface77a84f39901d4ca6)
 
-  '@deepseek-ai/dsh-session-query@https://github.com/TTTPOB/deepseek-harness/releases/download/daily-driver-v0.2.2-rc.5-fork1/deepseek-ai-dsh-session-query-0.2.2-rc.5-fork1.tgz(d0a401ee52c5e9ac20ade151dd47bcd1)':
+  '@deepseek-ai/dsh-session-query@https://github.com/TTTPOB/deepseek-harness/releases/download/daily-driver-v0.2.2-rc.5-fork8/deepseek-ai-dsh-session-query-0.2.2-rc.5-fork3.tgz(d0a401ee52c5e9ac20ade151dd47bcd1)':
     dependencies:
       '@deepseek-ai/cordis': 4.1.0(@deepseek-ai/cordis-plugin-include@1.1.0)(@deepseek-ai/cordis-plugin-loader@1.1.0)
       '@deepseek-ai/dsh-brand': 0.2.2-rc.5(@deepseek-ai/cordis@4.1.0)
