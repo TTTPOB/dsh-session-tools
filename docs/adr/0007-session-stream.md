@@ -24,10 +24,10 @@ Host 插件提供 Unix socket 上的只读 HTTP 接口。`GET /sessions` 提供�
 
 ### 沙箱与平台验证
 
-- **bwrap（Linux 首选后端）：**实测 `read-only`、`workspace-write` 均能用 `curl` 连接工作区外的 socket。`workspace-write` 用 tmpfs 替换 `/tmp`，使 Host 放在其中的 socket 不可见。挂载方式见 [sandbox-local 的 bwrap profile](<../../../deepseek-harness/packages/sandbox/sandbox-local/src/profiles.ts#L16-L22>)。
-- **Landlock（无 bwrap 时的后备）：**实测 launcher 报完全生效；`read-only` 和 `workspace-write` 均能用 `curl` 连接工作区外的 socket。授权参数见 [Landlock profile](<../../../deepseek-harness/packages/sandbox/sandbox-local/src/profiles.ts#L30-L35>)。
+- **bwrap（Linux 首选后端）：**实测 `read-only`、`workspace-write` 均能用 `curl` 连接工作区外的 socket。`workspace-write` 用 tmpfs 替换 `/tmp`，使 Host 放在其中的 socket 不可见。挂载方式见 [sandbox-local 的 bwrap profile](<https://github.com/TTTPOB/deepseek-harness/blob/32bff99ec5/packages/sandbox/sandbox-local/src/profiles.ts#L16-L22>)。
+- **Landlock（无 bwrap 时的后备）：**实测 launcher 报完全生效；`read-only` 和 `workspace-write` 均能用 `curl` 连接工作区外的 socket。授权参数见 [Landlock profile](<https://github.com/TTTPOB/deepseek-harness/blob/32bff99ec5/packages/sandbox/sandbox-local/src/profiles.ts#L30-L35>)。
 - **远端服务器家目录：**实测 `~/.dsh` 和家目录测试路径处于同一文件系统；该文件系统可创建 socket、连接并传输数据。
-- **审批：**按源码判断，默认 `ask` 策略不会对普通 `curl` 逐条审批。工具流水线只在 guard 返回 `ask` 时请求审批；Bash 只在模型显式申请扩大沙箱权限时另行请求。额外安装的 guard 可能改变结果。见 [Tool 执行流水线](<../../../deepseek-harness/packages/core/tools/src/pipeline.ts#L199-L206>)、[Bash 执行](<../../../deepseek-harness/packages/shell/tool-bash/src/index.ts#L502-L511>)。
+- **审批：**按源码判断，默认 `ask` 策略不会对普通 `curl` 逐条审批。工具流水线只在 guard 返回 `ask` 时请求审批；Bash 只在模型显式申请扩大沙箱权限时另行请求。额外安装的 guard 可能改变结果。见 [Tool 执行流水线](<https://github.com/TTTPOB/deepseek-harness/blob/32bff99ec5/packages/core/tools/src/pipeline.ts#L199-L206>)、[Bash 执行](<https://github.com/TTTPOB/deepseek-harness/blob/32bff99ec5/packages/shell/tool-bash/src/index.ts#L502-L511>)。
 - **未验证：**macOS Seatbelt；Windows 见下节。
 
 ### Windows
