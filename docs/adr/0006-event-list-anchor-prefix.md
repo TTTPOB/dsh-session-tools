@@ -1,6 +1,6 @@
 # ADR 0006：事件列表按锚点前缀适配输出预算
 
-- 状态：Accepted（已采纳）
+- 状态：Superseded（由 [ADR 0007](<0007-session-stream.md>) 取代）
 - 取代：[ADR 0002：展示预算与精确续读](<0002-local-reading-and-completeness.md#展示预算与精确续读>)中事件列表的整页超限处理。
 
 ## 背景

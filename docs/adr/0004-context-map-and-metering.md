@@ -101,4 +101,4 @@ Query 复用同模式、同源版本且仍有效的 prepared 对象；模式切�
 
 ## 实现依据
 
-Query 源解析和租约见 [observation.ts](../../../deepseek-harness/packages/session-query/session-query/src/observation.ts#L156-L291)；同步计量与结果复制见 [token-meter](../../../deepseek-harness/packages/llm/token-meter/src/index.ts#L146-L190)，原事件折叠见 [meter fold](../../../deepseek-harness/packages/llm/token-meter/src/surface-fold.ts#L107-L127)。现有输出配置见 [session-tools 配置](../../src/index.ts#L27-L31)，作用域、预览和结果字节限制复用 [shared helpers](../../src/shared.ts#L15-L42)。
+Query 源解析和租约见 [observation.ts](../../../deepseek-harness/packages/session-query/session-query/src/observation.ts#L156-L291)；同步计量与结果复制见 [token-meter](../../../deepseek-harness/packages/llm/token-meter/src/index.ts#L146-L190)，原事件折叠见 [meter fold](../../../deepseek-harness/packages/llm/token-meter/src/surface-fold.ts#L107-L127)。地图设计复用当时的会话工具输出配置、作用域、预览和结果字节限制。

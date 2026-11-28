@@ -1,5 +1,7 @@
 allowBuilds:
+  '@deepseek-ai/dsh-subprocess-local': false
   koffi: false
+  node-pty: false
 
 minimumReleaseAgeExclude:
   - '@deepseek-ai/cordis-plugin-loader@1.1.0'

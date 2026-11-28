@@ -1,219 +1,55 @@
+import { readFile } from 'node:fs/promises'
+import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import type { Context } from '@deepseek-ai/cordis'
-import type {} from '@deepseek-ai/dsh-agent'
-import type {} from '@deepseek-ai/dsh-session-projection-cache'
-import type {} from '@deepseek-ai/dsh-workspace'
+import type {} from '@deepseek-ai/dsh-app-boot'
+import type {} from '@deepseek-ai/dsh-shell-env'
+import { BUNDLED_SKILL_RANK, type SkillCandidate } from '@deepseek-ai/dsh-skill'
 import Schema from '@deepseek-ai/schemastery'
-import { defineTool, type ToolRunContext } from '@deepseek-ai/dsh-tools'
-import { SessionId } from '@deepseek-ai/dsh-session'
-import type { SessionRecord, SessionSearchCursor, SessionEventMetadataFilter } from '@deepseek-ai/dsh-session-query'
-
-import { bounded, trim, record, caller, authorize, searchError } from './shared.js'
-import { output, scopeParam, targetParam, limitParam, call } from './definitions.js'
-import { readTools } from './read-tools.js'
+import { startSessionStream } from './stream.js'
 
 /** Loader-visible plugin identity. */
 export const name = 'dsh-session-tools'
-/** Services required before tools are registered. */
-export const inject = ['tools', 'sessionQuery', 'agents', 'workspaceRegistry']
-/** Limits applied to native output, indexed searches and prepared event fragments. */
+export const inject = ['sessionQuery', 'profileContext', 'shellEnv', 'skills']
+
+/** Optional socket path; the default is computed from the active profile. */
 export interface Config {
-  pageSize: number; maxPageSize: number; previewChars: number; outputBytes: number
-  searchTimeoutMs: number; readTimeoutMs: number; readBatchSize: number
-  readSupplementalEvents: number; readProcessingBytes: number; readSeqSpan: number
-  projectionStringChars: number; projectionItems: number; projectionDepth: number; projectionNodes: number
-  eventReadCacheEntries: number; eventReadCacheBytes: number
+  socketPath?: string
 }
-/** Config fields may be omitted or null to use their schema defaults. */
-export type ConfigInput = { [K in keyof Config]?: Config[K] | null }
-/** Validate optional numeric input and return every configured limit. */
-export const Config: Schema<ConfigInput, Config> = Schema.object({
-  pageSize: Schema.number().step(1).min(1).max(100).default(30),
-  maxPageSize: Schema.number().step(1).min(1).max(100).default(100),
-  previewChars: Schema.number().step(1).min(0).max(4000).default(240),
-  outputBytes: Schema.number().step(1).min(1024).max(1048576).default(24576),
-  searchTimeoutMs: Schema.number().step(1).min(1).max(2147483647).default(30000),
-  readTimeoutMs: Schema.number().step(1).min(1).max(2147483647).default(30000),
-  readBatchSize: Schema.number().step(1).min(1).max(1024).default(128),
-  readSupplementalEvents: Schema.number().step(1).min(0).max(100000).default(1024),
-  readProcessingBytes: Schema.number().step(1).min(1024).max(1073741824).default(8388608),
-  readSeqSpan: Schema.number().step(1).min(0).max(1000000).default(4096),
-  projectionStringChars: Schema.number().step(1).min(0).max(100000).default(2000),
-  projectionItems: Schema.number().step(1).min(1).max(10000).default(32),
-  projectionDepth: Schema.number().step(1).min(1).max(64).default(8),
-  projectionNodes: Schema.number().step(1).min(1).max(100000).default(512),
-  eventReadCacheEntries: Schema.number().step(1).min(0).max(1000).default(8),
-  eventReadCacheBytes: Schema.number().step(1).min(0).max(1073741824).default(67108864),
-})
-/** Register reversible, native-object session query tools.
- * @param ctx - Cordis services shared with the active agent.
- * @param config - Validated page, preview, output, and search timeout limits.
- */
-export function apply(ctx: Context, config: Config): void {
-  const { pageSize, maxPageSize, previewChars, outputBytes, searchTimeoutMs } = config
-  if (typeof ctx.sessionQuery.pageSessions !== 'function' || typeof ctx.sessionQuery.pageEvents !== 'function' || typeof ctx.sessionQuery.observeSession !== 'function' || typeof ctx.sessionQuery.captureSession !== 'function') throw new Error('dsh-session-tools requires sessionQuery pageSessions/pageEvents/observeSession/captureSession (capture-capable Query peer required)')
-  if (pageSize > maxPageSize) throw new RangeError('pageSize cannot exceed maxPageSize')
-  const pageLimitParam = limitParam(pageSize, maxPageSize)
-  const size = (n?: number) => {
-    const value = n ?? pageSize
-    if (!Number.isSafeInteger(value) || value < 1 || value > maxPageSize) throw new RangeError(`limit must be an integer between 1 and ${maxPageSize}`)
-    return value
-  }
-  const id = (text: string) => { if (!text.trim()) throw new Error('session_id is required'); return SessionId(text) }
-  const target = async (text: string, exec: ToolRunContext, access: ReturnType<typeof caller>) => {
-    const sessionId = id(text)
-    const records = await ctx.sessionQuery.filterSessions([{ kind: 'id', values: [sessionId] }], exec.signal)
-    exec.signal.throwIfAborted()
-    const match = records.find(item => item.header.id === sessionId)
-    if (!match) throw new Error(`Session ${sessionId} not found`)
-    authorize(match.header, access)
-    return sessionId
-  }
-  const titles = async (records: readonly SessionRecord[], exec: ToolRunContext, access: ReturnType<typeof caller>) => {
-    const map = new Map<string, { title: string; cached?: true }>()
-    if (!records.length) return map
-    const cache = ctx.get('sessionProjectionCache')
-    const sessions = ctx.get('sessions')
-    const unresolved: ReturnType<typeof id>[] = []
-    for (const item of new Map(records.map(item => [item.header.id, item])).values()) {
-      authorize(item.header, access)
-      // Live results retain the exact query read, never a stale checkpoint hint.
-      if (item.live || sessions?.get(item.header.id) !== undefined) {
-        unresolved.push(item.header.id)
-        continue
-      }
-      let title = cache?.cachedSnapshot(item.header, ['title'])?.values.title
-      if (title === undefined) title = cache?.cachedPredecessorTitle(item.header)?.values.title
-      if (title === undefined) unresolved.push(item.header.id)
-      else map.set(item.header.id, { title: trim(title ?? '(untitled)', previewChars).preview, cached: true })
-    }
-    exec.signal.throwIfAborted()
-    if (!unresolved.length) return map
-    const results = await ctx.sessionQuery.readTitleSnapshots(unresolved, exec.signal)
-    exec.signal.throwIfAborted()
-    for (const result of results) {
-      if (result.status === 'rejected') throw result.reason
-      authorize(result.value.session, access)
-      map.set(result.sessionId, { title: trim(result.value.title?.title ?? '(untitled)', previewChars).preview })
-    }
-    return map
-  }
-  // The effect disposes registrations; add rolls back partial registration failures.
-  ctx.effect(() => {
-    const disposers: Array<() => void> = []
-    const add = (definition: Parameters<typeof ctx.tools.register>[0]) => { try { disposers.push(ctx.tools.register(definition)) } catch (error) { for (const dispose of disposers.reverse()) dispose(); throw error } }
-    add(defineTool({ name: 'session_list', description: 'List a stable snapshot of session metadata. Titles are display hints; title_cached:true marks cached hints that may lag renames. project uses exact caller cwd; all uses the current provider only.', parameters: { scope: scopeParam, ...pageLimitParam, cursor: { type: 'string', description: 'Opaque snapshot continuation; keep scope and limit unchanged.' } }, output, presentCall: call('List sessions'), async execute(args, exec) {
-      const access = caller(exec, args.scope)
-      exec.signal.throwIfAborted()
-      const page = await ctx.sessionQuery.pageSessions({ filters: access.project ? [{ kind: 'cwd', values: [access.cwd!] }] : [], limit: size(args.limit), ...(args.cursor === undefined ? {} : { cursor: args.cursor as SessionSearchCursor }) }, exec.signal)
-      exec.signal.throwIfAborted()
-      let names: Awaited<ReturnType<typeof titles>>
-      try { names = await titles(page.items, exec, access) }
-      catch (error) {
-        if (error instanceof Error && 'code' in error && error.code === 'SESSION_QUERY_SESSION_NOT_FOUND') error.message += ' (Snapshot item no longer available; start a new listing without a cursor.)'
-        throw error
-      }
-      const items = page.items.map(item => record(item, names.get(item.header.id)?.title, !access.project, names.get(item.header.id)?.cached))
-      const result = { items, has_more: !!page.nextCursor, next_cursor: page.nextCursor ?? null }
-      if (!bounded(result, outputBytes)) throw new Error('Session list page exceeds outputBytes; lower limit and start a new listing without a cursor, or increase configured outputBytes; no partial result was returned')
-      return result
-    } }))
-    add(defineTool({
-      name: 'session_search',
-      description: 'Indexed FTS token search across sessions; not arbitrary substring matching. Titles are display hints; title_cached:true marks cached hints that may lag renames. Never scans logs for search. Excludes caller session and archived sessions by default. Do not search archived sessions unless there is a specific need; set include_archived:true only then. Filtered pages can be empty with has_more:true; continue with next_cursor.',
-      parameters: {
-        query: { type: 'string', required: true },
-        scope: scopeParam,
-        ...pageLimitParam,
-        cursor: { type: 'string', description: 'Opaque continuation cursor.' },
-        include_current: { type: 'boolean', description: 'Include current session (default false).' },
-        include_archived: { type: 'boolean', description: 'Include archived sessions (default false). Use only for a specific need to retrieve archived work; keep unchanged across continuation requests.' },
-      },
-      output,
-      timeoutMs: searchTimeoutMs,
-      presentCall: call('Search sessions'),
-      async execute(args, exec) {
-        const access = caller(exec, args.scope)
-        const query = args.query.trim(); if (!query) throw new Error('query must not be empty')
-        const requested = size(args.limit)
-        exec.signal.throwIfAborted()
-        let page
-        try {
-          page = await ctx.sessionQuery.searchSessions({
-            query,
-            limit: requested,
-            sessionFilters: access.project ? [{ kind: 'cwd', values: [access.cwd!] }] : [],
-            ...(args.cursor ? { cursor: args.cursor as SessionSearchCursor } : {}),
-          }, { signal: exec.signal })
-        } catch (error) { searchError(error) }
-        exec.signal.throwIfAborted()
-        const archived = new Set(ctx.workspaceRegistry.archivedSessionIds)
-        const hits = page.items.filter(hit =>
-          (args.include_current || hit.header.id !== access.id)
-          && (args.include_archived === true || !archived.has(hit.header.id)))
-        const names = await titles(hits, exec, access)
-        const items = hits.map(hit => {
-          const snippet = trim(hit.bestMatch.snippet, previewChars)
-          return {
-            ...record(hit, names.get(hit.header.id)?.title, !access.project, names.get(hit.header.id)?.cached),
-            archived: archived.has(hit.header.id),
-            seq: hit.bestMatch.seq,
-            type: hit.bestMatch.type,
-            snippet: snippet.preview,
-            snippet_truncated: snippet.text_truncated,
-          }
-        })
-        const result = { items, has_more: !!page.nextCursor, next_cursor: page.nextCursor ?? null }
-        if (!bounded(result, outputBytes)) throw new Error('Indexed search page exceeds outputBytes; lower limit and start a new search without a cursor, or increase configured outputBytes; no partial result was returned')
-        return result
-      },
-    }))
-    add(defineTool({ name: 'session_event_search', description: 'Indexed FTS token search within a session; not arbitrary substring matching. Searches existing indexed documents across all surfaces by default. PTC dispatch records are not indexed; no match does not mean no record. Snippets are index excerpts; use read_seq with session_event_read for Detail or Raw. Never scans logs or reads activities for hits. When searching your own session, all pages exclude the step executing the first request and later events.', parameters: { ...targetParam, query: { type: 'string', required: true }, scope: scopeParam, ...pageLimitParam, surfaces: { type: 'array', items: { type: 'string', enum: ['current', 'shadowed', 'log-only'] }, description: 'OR filter on indexed surfaces; omit for all three. Empty arrays are rejected. Keep unchanged on continuation.' }, cursor: { type: 'string', description: 'Opaque continuation; keep query, scope, limit and surfaces unchanged.' } }, output, timeoutMs: searchTimeoutMs, presentCall: call('Search events'), async execute(args, exec) {
-      const access = caller(exec, args.scope); const sessionId = await target(args.session_id, exec, access)
-      const query = args.query.trim(); if (!query) throw new Error('query must not be empty')
-      const requested = size(args.limit)
-      if (args.surfaces?.length === 0) throw new Error('surfaces must not be empty')
-      let cursor = args.cursor
-      let cut: number | undefined
-      if (sessionId === access.id) {
-        if (cursor === undefined) {
-          const boundary = ctx.agents.turnBoundaryOf(exec.agent!.session).lastStepStartSeq
-          if (boundary == null) throw new Error('Current-session search requires a step/start event')
-          if (boundary === 0) return { session_id: sessionId, items: [], has_more: false, next_cursor: null }
-          cut = boundary - 1
-        } else {
-          // Provider cursors never contain ~, so it separates the pinned cut without decoding the provider token.
-          const parts = /^(0|[1-9]\d*)~([^~]+)$/.exec(cursor)
-          if (!parts || !Number.isSafeInteger(Number(parts[1]))) throw new Error('Invalid cursor; start a new search without a cursor.')
-          cut = Number(parts[1])
-          cursor = parts[2]!
-        }
-      }
-      const filters: SessionEventMetadataFilter[] = cut === undefined ? [] : [{ kind: 'seq', to: cut }]
-      if (args.surfaces !== undefined) filters.push({ kind: 'surface', values: args.surfaces })
-      exec.signal.throwIfAborted()
-      let page
-      try { page = await ctx.sessionQuery.searchEvents({ sessionId, query, filters, limit: requested, ...(cursor ? { cursor: cursor as SessionSearchCursor } : {}) }, { signal: exec.signal }) }
-      catch (error) { searchError(error) }
-      authorize(page.session, access)
-      exec.signal.throwIfAborted()
-      const items = page.items.map(hit => {
-        const snippet = trim(hit.snippet, previewChars)
-        return { seq: hit.seq, type: hit.type, time: hit.time, surface: hit.surface, snippet: snippet.preview, snippet_truncated: snippet.text_truncated, read_seq: hit.seq }
-      })
-      const nextCursor = page.nextCursor && cut !== undefined ? `${cut}~${page.nextCursor}` : page.nextCursor
-      const result = { session_id: sessionId, items, has_more: !!nextCursor, next_cursor: nextCursor ?? null }
-      if (!bounded(result, outputBytes)) throw new Error('Indexed search page exceeds outputBytes; lower limit and start a new search without a cursor, or increase configured outputBytes; no partial result was returned')
-      return result
-    } }))
-    const reads = readTools(ctx, {
-      outputBytes, pageSize, maxPageSize, target, titles, readTimeoutMs: config.readTimeoutMs,
-      readerBudget: { readBatchSize: config.readBatchSize, supplementalEvents: config.readSupplementalEvents,
-        processingBytes: config.readProcessingBytes, seqSpan: config.readSeqSpan },
-      projectionBudget: { maxStringChars: config.projectionStringChars, maxPreviewChars: previewChars, maxItems: config.projectionItems,
-        maxDepth: config.projectionDepth, maxNodes: config.projectionNodes, outputBytes },
-      eventReadCacheEntries: config.eventReadCacheEntries, eventReadCacheBytes: config.eventReadCacheBytes,
-    })
-    for (const tool of reads.tools) add(tool)
-    return () => { reads.dispose(); for (const dispose of disposers.reverse()) dispose() }
+
+export const Config: Schema<Config> = Schema.object({ socketPath: Schema.string().min(1) })
+
+const skillRoot = fileURLToPath(new URL('../skills/session-stream/', import.meta.url))
+const skillPath = join(skillRoot, 'SKILL.md')
+const skill = {
+  name: 'session-stream',
+  description: 'Find and inspect DSH session history, debug tool errors and subagents, and summarize raw session events with curl and jq.',
+  invocation: { modelInvocable: true, userInvocable: true },
+  provider: name,
+  source: 'bundled',
+  resourceBase: { kind: 'directory', path: skillRoot },
+} as const
+
+/** Own the socket, Bash environment contribution and bundled skill with the plugin fiber. */
+export async function* apply(ctx: Context, config: Config) {
+  if (process.platform === 'win32') throw new Error('dsh-session-tools: Unix session stream is not available on Windows')
+  const socketPath = config.socketPath ?? join(ctx.profileContext.home, 'run', `session-stream-${ctx.profileContext.name}.sock`)
+  const stream = startSessionStream(socketPath, ctx.sessionQuery, config.socketPath === undefined)
+  yield stream.dispose
+  await stream.ready
+  yield ctx.shellEnv.register({
+    name,
+    variables: { DSH_SESSION_STREAM: { description: 'Unix socket for the DSH session history stream; use the session-stream skill.' } },
+    resolve: execution => execution.agent === undefined || execution.name !== 'bash' ? {} : { DSH_SESSION_STREAM: socketPath },
   })
+  yield ctx.skills.registerProvider(() => ({
+    name,
+    async list() {
+      const candidate: SkillCandidate = { ...skill, rank: BUNDLED_SKILL_RANK, locator: skillPath }
+      return { candidates: [candidate], complete: true }
+    },
+    async get(_candidate, { signal }) {
+      return { ...skill, content: await readFile(skillPath, { encoding: 'utf8', signal }) }
+    },
+  }))
 }

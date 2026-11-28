@@ -1,7 +1,6 @@
 # ADR 0003：搜索与事件投影分离
 
-- 状态：Accepted（已采纳）
-- 实施情况：已完成并验收。surfaces 过滤与轻量 read_seq 已接入搜索；省略 surfaces 默认覆盖全部三个面中的既有索引文档，原字段投影不扩展索引。
+- 状态：Accepted；工具投影及工具参数部分由 [ADR 0007](<0007-session-stream.md>) 取代，索引仍由 provider 负责
 
 ## 背景
 
@@ -9,7 +8,7 @@
 
 现有[文本提取器](<../../../deepseek-harness/packages/session-query/session-query/src/extraction.ts>)只为 user/message、assistant/message、tool/call、tool/result、todo/write 和部分 turn/end 提取文本；空文本事件不建立搜索文档，见[文档构建](<../../../deepseek-harness/packages/session-query/session-query/src/documents.ts#L36-L53>)。例如工具结果中的 error.name/code 可被提取，error.reason/meta 并不会因此全部可搜索。PTC（Programmatic Tool Calling，程序化工具调用）在代码执行中产生的子工具 dispatch 记录没有独立全文文档。
 
-此前列表复用同一提取文本生成预览，导致“未索引”也变成“缺少可读预览”；现在[列表](<../../src/read-tools.ts>)直接投影原事件字段。历史理解需要改善预览，但不必同时扩大搜索索引。
+此前列表复用同一提取文本生成预览，导致“未索引”也变成“缺少可读预览”；本 ADR 的历史列表工具直接投影原事件字段。历史理解需要改善预览，但不必同时扩大搜索索引。
 
 ## 决策
 

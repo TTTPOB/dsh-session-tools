@@ -30,7 +30,7 @@ const fixture = () => {
     peerDependencies: { '@deepseek-ai/cordis': '*', '@deepseek-ai/dsh-tools': '*' },
     dependencies: { '@deepseek-ai/schemastery': '*' },
   }))
-  put(join(plugin, 'dist/index.js'), "import { defineTool } from '@deepseek-ai/dsh-tools'; import Schema from '@deepseek-ai/schemastery'; export const name = 'dsh-session-tools'; export const apply = () => {}; export const Config = Schema.object({ pageSize: Schema.number().min(1).default(30), maxPageSize: Schema.number().default(100) }); export const sharedTool = defineTool;\n")
+  put(join(plugin, 'dist/index.js'), "import { defineTool } from '@deepseek-ai/dsh-tools'; import Schema from '@deepseek-ai/schemastery'; export const name = 'dsh-session-tools'; export const apply = () => {}; export const Config = Schema.object({ socketPath: Schema.string().min(1) }); export const sharedTool = defineTool;\n")
   const schemaDir = dirname(createRequire(import.meta.url).resolve('@deepseek-ai/schemastery/package.json'))
   mkdirSync(join(plugin, 'node_modules/@deepseek-ai'), { recursive: true })
   symlinkSync(schemaDir, join(plugin, 'node_modules/@deepseek-ai/schemastery'), 'dir')
@@ -211,11 +211,11 @@ test('invalid Config fails before changing configuration', () => {
   const f = fixture()
   try {
     const entry = join(f.plugin, 'dist/index.js')
-    put(entry, readFileSync(entry, 'utf8').replace('Schema.number().min(1).default(30)', 'Schema.number().min(1).default(0)'))
+    put(entry, readFileSync(entry, 'utf8').replace('Schema.string().min(1)', 'Schema.number()'))
     const before = readFileSync(join(f.home, 'cordis.patch.yml'), 'utf8')
     const result = run(f)
     assert.equal(result.status, 1)
-    assert.match(result.stderr, /pageSize expected number/)
+    assert.match(result.stderr, /socketPath expected number/)
     assert.equal(readFileSync(join(f.home, 'cordis.patch.yml'), 'utf8'), before)
   } finally { rmSync(f.root, { recursive: true, force: true }) }
 })
@@ -261,32 +261,30 @@ test('Release-source preflight checks exact source and installed version without
   } finally { rmSync(f.root, { recursive: true, force: true }) }
 })
 
-test('built plugin under Host-provided profile peers executes session_list after Release preflight', async () => {
+test('built plugin streams through Host-provided profile peers after preflight', () => {
   const f = fixture()
   try {
     const source = resolve(import.meta.dirname, '..')
     const manifest = JSON.parse(readFileSync(join(source, 'package.json'), 'utf8'))
     execFileSync('pnpm', ['pack', '--pack-destination', f.root], { cwd: source, stdio: 'pipe' })
     f.version = manifest.version
-    f.source = `https://github.com/TTTPOB/dsh-session-tools/releases/download/v${manifest.version}/dsh-session-tools-${manifest.version}.tgz`
+    f.source = process.env.DSH_TEST_PLUGIN_SOURCE ?? join(f.root, `dsh-session-tools-${manifest.version}.tgz`)
     const profile = join(f.home, 'profiles/web/package.json')
     rmSync(join(f.home, 'profiles/web/node_modules/dsh-session-tools'))
     put(profile, JSON.stringify({ private: true, type: 'module', dsh: { profile: { bundles: [] } } }))
-    const installSource = process.env.DSH_TEST_PLUGIN_SOURCE ?? join(f.root, `dsh-session-tools-${manifest.version}.tgz`)
-    execFileSync('pnpm', ['--config.auto-install-peers=false', '--ignore-workspace', 'add', installSource], { cwd: join(f.home, 'profiles/web'), stdio: 'pipe' })
+    const storeDir = process.env.DSH_TEST_STORE_DIR ?? execFileSync('pnpm', ['store', 'path'], { cwd: source, encoding: 'utf8' }).trim()
+    execFileSync('pnpm', ['--store-dir', storeDir, '--config.auto-install-peers=false', '--ignore-workspace', 'add', f.source], { cwd: join(f.home, 'profiles/web'), stdio: 'pipe' })
     const installed = JSON.parse(readFileSync(profile, 'utf8'))
     assert.deepEqual(Object.keys(installed.dependencies), ['dsh-session-tools'])
-    // Offline regression uses the current tarball; an explicit Release input verifies URL installation too.
-    if (process.env.DSH_TEST_PLUGIN_SOURCE) assert.equal(installed.dependencies['dsh-session-tools'], f.source)
-    else installed.dependencies['dsh-session-tools'] = f.source
-    put(profile, JSON.stringify(installed))
     const result = run(f, undefined, true)
     assert.equal(result.status, 0, result.stderr)
     // The child owns the resolver hooks and all plugin registrations.
     const driver = join(f.root, 'behavior.mjs')
     put(driver, `import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
-import { realpathSync } from 'node:fs';
+import { existsSync, realpathSync } from 'node:fs';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { pathToFileURL } from 'node:url';
 const anchor = realpathSync(${JSON.stringify(f.host)});
 const req = createRequire(anchor);
@@ -296,19 +294,24 @@ const resolution = await createRuntimeResolution({ installAnchor: anchor, profil
 const ctx = new Context();
 try {
  await ctx.plugin(PluginPackages, { resolution });
- const tools = new Map();
- ctx.provide('tools', { register(tool) { tools.set(tool.name, tool); return () => tools.delete(tool.name) } });
- ctx.provide('workspaceRegistry', { archivedSessionIds: [] });
- ctx.provide('agents', { turnBoundaryOf: () => ({ lastStepStartSeq: 3 }) });
- let calls = 0;
- ctx.provide('sessionQuery', { pageSessions: async () => { calls++; return { items: [] } }, pageEvents: async () => ({ items: [] }), observeSession: async () => { throw new Error('session_list must not observe logs') }, captureSession: async () => { throw new Error('session_list must not capture logs') } });
+ const home = ${JSON.stringify(f.home)};
+ ctx.provide('profileContext', { home, name: 'web' });
+ ctx.provide('sessionQuery', {
+  pageSessions: async () => ({ items: [{ header: { id: 'smoke' }, live: false, persisted: true }] }),
+  readTitleSnapshots: async () => [{ status: 'fulfilled', value: { title: { title: 'Profile peer smoke' } } }],
+ });
+ const { default: Skills } = await import(pathToFileURL(req.resolve('@deepseek-ai/dsh-skill')));
+ const shellEnv = await import(pathToFileURL(req.resolve('@deepseek-ai/dsh-shell-env')));
+ await ctx.plugin(Skills);
+ await ctx.plugin(shellEnv, { dshHome: home });
  const plugin = await import(pathToFileURL(${JSON.stringify(join(f.home, 'profiles/web/node_modules/dsh-session-tools/dist/index.js'))}));
- await ctx.plugin(plugin, {});
- const result = await tools.get('session_list').execute({}, { signal: new AbortController().signal, agent: { session: { id: 'caller', header: { cwd: '/fixture' } } } });
- assert.deepEqual(result, { items: [], has_more: false, next_cursor: null });
- assert.equal(calls, 1);
+ const socketPath = ${JSON.stringify(join(f.root, 's.sock'))};
+ await ctx.plugin(plugin, { socketPath });
+ const { stdout } = await promisify(execFile)('curl', ['-sS', '--fail-with-body', '--unix-socket', socketPath, 'http://localhost/sessions']);
+ assert.equal(JSON.parse(stdout).title, 'Profile peer smoke');
+ assert.ok(await ctx.skills.get('session-stream'));
  await ctx.fiber.dispose();
- assert.equal(tools.size, 0);
+ assert.equal(existsSync(socketPath), false);
 } finally { await ctx.fiber.dispose() }
 `);
     const behavior = spawnSync(process.execPath, [driver], { encoding: 'utf8' })

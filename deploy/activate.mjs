@@ -107,19 +107,13 @@ try {
       if (module.name !== plugin || typeof module.apply !== 'function') fail(`${profile}: built plugin entry has invalid named exports`)
       // Validate the plugin's own schema through the Host's Schemastery, as the Loader does.
       const hostSchema = (await import(pathToFileURL(hostReq.resolve('@deepseek-ai/schemastery')).href)).default
-      const [defaults] = hostSchema.resolve({}, module.Config, {})
-      if (defaults.pageSize !== 30 || defaults.maxPageSize !== 100) fail(`${profile}: Config defaults failed Host validation`)
-      let rejected = false
-      try { hostSchema.resolve({ pageSize: 0 }, module.Config, {}) } catch { rejected = true }
-      if (!rejected) fail(`${profile}: invalid Config passed Host validation`)
+      hostSchema.resolve({}, module.Config, {})
+      const socketPath = join(root, 'run', 'activation-check.sock')
+      const [configured] = hostSchema.resolve({ socketPath }, module.Config, {})
+      if (configured.socketPath !== socketPath) fail(`${profile}: Config discarded socketPath`)
     } finally {
       await ctx.fiber.dispose()
     }
-  }
-  if (!checkOnly && (oldPatch.includes("name: '@deepseek-ai/dsh-tool-session-query'") || oldPatch.includes('name: "@deepseek-ai/dsh-tool-session-query"'))) fail('Official session tool is present in home patch; remove or disable it first')
-  for (const name of profiles) {
-    const profilePatch = join(root, `profiles/${name}/cordis.patch.yml`)
-    if (!checkOnly && existsSync(profilePatch) && read(profilePatch).includes('@deepseek-ai/dsh-tool-session-query')) fail(`${name}: official session tool found in profile patch`)
   }
   if (checkOnly) {
     console.log(`Read-only DSH profile preflight passed for ${profiles.join(',')}; no configuration changed.`)

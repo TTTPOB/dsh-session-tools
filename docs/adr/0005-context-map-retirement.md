@@ -1,6 +1,6 @@
 # ADR 0005：移除模型上下文地图接口
 
-- 状态：Accepted（已采纳）
+- 状态：Accepted；保留历史工具的部分由 [ADR 0007](<0007-session-stream.md>) 取代
 - 取代：[ADR 0004：通用 Surface 地图与同源计量](<0004-context-map-and-metering.md>)的模型地图与 map-specific 公共接口设计。
 
 ## 背景
