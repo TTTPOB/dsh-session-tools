@@ -2,7 +2,7 @@
 
 Use this skill to find prior conversations, inspect full events or tool errors, trace subagents, or compute statistics. Query from Bash with `curl` and filter with `jq`. Avoid opening or decompressing session files directly. If indexed search reports an error, surface it instead of scanning logs to replace the search.
 
-Use exact, full session IDs. The socket reads the current Host's session corpus. Default scope is all projects. To stay within a project, pass its exact absolute session `cwd` to `/sessions` or `/search`; or use IDs already known to belong to the project. If `$DSH_SESSION_STREAM` is absent, Bash is not connected to an active Unix stream; report that rather than guessing a socket path. This API reads one cut per session, not a continuous tail.
+Use exact, full session IDs copied from `/sessions` or `/search` output: some IDs start with `session-` and some are bare UUIDs, so never add or strip the prefix. The socket reads the current Host's session corpus. Default scope is all projects. To stay within a project, pass its exact absolute session `cwd` to `/sessions` or `/search`; or use IDs already known to belong to the project. If `$DSH_SESSION_STREAM` is absent, Bash is not connected to an active Unix stream; report that rather than guessing a socket path. This API reads one cut per session, not a continuous tail.
 
 ## Endpoints (GET)
 
@@ -13,7 +13,7 @@ Use exact, full session IDs. The socket reads the current Host's session corpus.
 | `/events` | 1–50 repeated `session` values; optional `types` (comma-separated), `after_seq` (exclusive, min. −1), `until_seq` (inclusive, min. 0) | original event with added `session_id` |
 | `/trace` | exactly one `session` | `target`, `ancestors`, `descendants`, `complete`; `root` or `unresolvedParentId` |
 
-`limit` is a positive integer; leaving it out returns all results. No cursor is exposed. `types` omitted excludes `request/header` and `system/message`; name either explicitly to include it. Use `--get --data-urlencode` for query strings. Example indexed queries: `"connection refused"`, `timeout OR retry`, `timeout -deprecated`. Index warmup may delay `/search` for up to 120 seconds.
+`limit` is a positive integer; leaving it out returns all results, which for a common word can be tens of thousands of lines, so always pass `limit` to `/search` and `/sessions` unless you aggregate the whole stream in `jq`. No cursor is exposed. `types` omitted excludes `request/header` and `system/message`; name either explicitly to include it. Use `--get --data-urlencode` for query strings. Example indexed queries: `"connection refused"`, `timeout OR retry`, `timeout -deprecated`. Index warmup may delay `/search` for up to 120 seconds.
 
 Each line is a complete JSON value, including large events. An `error` line or nonzero command exit means the results are incomplete. Before the first row, errors use a non-2xx response and a single `{"error":{"code":"…","message":"…"}}` line; after the first row, the service writes an error line and aborts the transfer. Keep `set -o pipefail` so a successful `jq` does not hide curl's failure. Do not treat a truncated Bash preview as a complete result: reduce, filter, or aggregate inside Bash.
 

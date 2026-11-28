@@ -193,7 +193,7 @@ function errorResponse(error: unknown) {
   const code = errorCode(error) ?? 'SESSION_STREAM_INTERNAL_ERROR'
   const status = error instanceof RequestError ? error.status
     : code === 'SESSION_QUERY_SESSION_NOT_FOUND' ? 404
-      : code.startsWith('SESSION_QUERY_INVALID_') ? 400
+      : code.startsWith('SESSION_QUERY_INVALID_') || code === 'SESSION_QUERY_EXCLUSION_ONLY' ? 400
         : 500
   return { status, error: { code, message: error instanceof Error ? error.message : String(error) } }
 }
