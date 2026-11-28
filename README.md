@@ -30,7 +30,7 @@ DSH 的只读会话历史接口。Agent 在 Bash 中读取 Unix socket 上的 ND
 | `/events` | 1–50 个 `session`；可选 `types`（逗号分隔）、`after_seq`（不含）、`until_seq`（含） | 原始事件加顶层 `session_id`；按会话输入顺序、会话内按 `seq` 排序 |
 | `/trace` | 一个 `session` | `target`、`ancestors`、`descendants`、`complete`；完整时含 `root`，否则含 `unresolvedParentId` |
 
-- `cwd` 是会话元数据中的精确绝对目录，不是权限隔离。限制范围时显式传入。查询语法由 provider 解析。索引预热期间，一个 `/search` 请求总共最多等待 120 秒。索引失败时不扫日志补搜索结果。
+- `cwd` 是会话元数据中的精确绝对目录，不是权限隔离。限制范围时显式传入。查询语法由 provider 解析。索引预热期间，一个 `/search` 请求总共最多等待 120 秒。索引失败时不扫日志补搜索结果。中文、日文、韩文按任意连续片段匹配。索引不收工具调用事件、系统注入的用户消息（指令、skill 目录、运行时上下文等提醒）和超过 10000 字符的工具结果，这些内容用 `/events` 读原文后自行过滤。
 - `limit` 为正安全整数，省略时返回全部结果；常见词的命中可能有数万行，`/search` 和 `/sessions` 应带上 `limit`。请求必须使用 GET；未知参数、非重复参数多次出现、目标 ID 不存在均报错。
 - `/events` 默认排除 `request/header` 和 `system/message`；显式 `types` 可选中它们。每个会话取一次固定观察点（含尚未持久化的实时事件），不是持续订阅。不做历史消息折叠或事件正文裁剪。
 
