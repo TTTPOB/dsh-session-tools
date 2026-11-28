@@ -16,7 +16,7 @@ Host 插件提供 Unix socket 上的只读 HTTP 接口。`GET /sessions` 提供�
 
 ### Socket 与范围
 
-默认地址是 `$DSH_HOME/run/session-stream-<profile>.sock`。该目录权限为 `0700`，socket 权限为 `0600`。同用户通过本机文件权限访问，不另设 token。Bash 的 `DSH_SESSION_STREAM` 指向当前 Host 的 socket。`socketPath` 可显式覆盖默认路径。
+默认地址是 `$DSH_HOME/run/session-stream-<profile>.sock`。该目录权限为 `0700`，socket 权限为 `0600`。同用户通过本机文件权限访问，不另设 token。Bash 的 `DSH_SESSION_STREAM` 指向当前 Host 的 socket。`socketPath` 可显式覆盖默认路径。路径上已有 socket 时，插件先尝试连接：仍有服务在监听就拒绝启动，避免误删另一实例的 socket；连接被拒绝时才替换残留文件。
 
 不放在 `/tmp`，因为 Linux workspace-write 沙箱的临时文件系统会遮住 Host 的 socket。也不依赖 `XDG_RUNTIME_DIR`，该变量在 systemd 临时任务或没有登录会话的环境里可能未设置。
 
