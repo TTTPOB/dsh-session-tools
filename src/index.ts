@@ -34,7 +34,7 @@ const skill = {
 export async function* apply(ctx: Context, config: Config) {
   if (process.platform === 'win32') throw new Error('dsh-session-tools: Unix session stream is not available on Windows')
   const socketPath = config.socketPath ?? join(ctx.profileContext.home, 'run', `session-stream-${ctx.profileContext.name}.sock`)
-  const stream = startSessionStream(socketPath, ctx.sessionQuery, config.socketPath === undefined)
+  const stream = await startSessionStream(socketPath, ctx.sessionQuery, config.socketPath === undefined)
   yield stream.dispose
   await stream.ready
   yield ctx.shellEnv.register({

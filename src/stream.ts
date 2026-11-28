@@ -1,6 +1,7 @@
 import { once } from 'node:events'
 import { chmodSync, lstatSync, mkdirSync, unlinkSync } from 'node:fs'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
+import { connect } from 'node:net'
 import { dirname, isAbsolute } from 'node:path'
 import { setImmediate, setTimeout as wait } from 'node:timers/promises'
 import type { Context } from '@deepseek-ai/cordis'
@@ -116,8 +117,7 @@ async function* readEvents(query: Query, params: URLSearchParams, signal: AbortS
   }
 }
 
-async function waitForIndex<T>(search: (signal: AbortSignal) => Promise<T>, signal: AbortSignal): Promise<T> {
-  const deadline = AbortSignal.timeout(SEARCH_WARMUP_MS)
+async function waitForIndex<T>(search: (signal: AbortSignal) => Promise<T>, signal: AbortSignal, deadline: AbortSignal): Promise<T> {
   const attemptSignal = AbortSignal.any([signal, deadline])
   let warming = false
   try {
@@ -152,6 +152,8 @@ async function* search(query: Query, params: URLSearchParams, signal: AbortSigna
   if (ids.length > 0) filters.push({ kind: 'id', values: ids })
   await requireSessions(query, ids, signal)
   const input = { query: text, sessionFilters: filters }
+  // One budget covers every page of this request, so later warming retries cannot extend it.
+  const deadline = AbortSignal.timeout(SEARCH_WARMUP_MS)
   let cursor: SessionSearchCursor | undefined
   do {
     // Keep the provider's page size constant across its cursor chain and apply the HTTP limit to yielded hits.
@@ -159,7 +161,7 @@ async function* search(query: Query, params: URLSearchParams, signal: AbortSigna
       const request = { ...input, cursor }
       const exec = { signal: attemptSignal }
       return group === 'session' ? query.searchSessions(request, exec) : query.searchEvents(request, exec)
-    }, signal)
+    }, signal, deadline)
     for (const hit of page.items) {
       yield hit
       if (--remaining === 0) return
@@ -223,8 +225,22 @@ async function serve(request: IncomingMessage, response: ServerResponse, query: 
   }
 }
 
-/** Bind one private NDJSON socket; the owner must dispose it before rebinding the path. */
-export function startSessionStream(socketPath: string, query: Query, privateDirectory: boolean) {
+/** Whether a Host is still accepting connections on an existing socket file. */
+async function socketInUse(socketPath: string): Promise<boolean> {
+  const socket = connect(socketPath)
+  try {
+    await once(socket, 'connect')
+    return true
+  } catch (error) {
+    if (errorCode(error) === 'ECONNREFUSED') return false
+    throw error
+  } finally {
+    socket.destroy()
+  }
+}
+
+/** Bind one private NDJSON socket; refuses a path another live server still owns. */
+export async function startSessionStream(socketPath: string, query: Query, privateDirectory: boolean) {
   const maxBytes = process.platform === 'darwin' ? 103 : 107
   if (!isAbsolute(socketPath) || socketPath.includes('\0') || Buffer.byteLength(socketPath) > maxBytes) {
     throw new Error(`Session stream socketPath must be an absolute path of at most ${maxBytes} UTF-8 bytes without NUL`)
@@ -235,6 +251,9 @@ export function startSessionStream(socketPath: string, query: Query, privateDire
   const existing = lstatSync(socketPath, { throwIfNoEntry: false })
   if (existing !== undefined) {
     if (!existing.isSocket()) throw new Error(`Session stream socketPath is not a Unix socket: ${socketPath}`)
+    if (await socketInUse(socketPath)) {
+      throw new Error(`Session stream socketPath is in use by another server; configure a distinct socketPath: ${socketPath}`)
+    }
     unlinkSync(socketPath)
   }
   const server = createServer((request, response) => { void serve(request, response, query) })

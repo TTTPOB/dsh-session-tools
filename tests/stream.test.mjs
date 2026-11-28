@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { once } from 'node:events'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { link, mkdtemp, rm, stat } from 'node:fs/promises'
 import { get } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -17,7 +17,7 @@ async function serve(t, query) {
   const dir = await mkdtemp(join(tmpdir(), 'session-stream-'))
   t.after(() => rm(dir, { recursive: true, force: true }))
   const socketPath = join(dir, 's.sock')
-  const stream = startSessionStream(socketPath, query, true)
+  const stream = await startSessionStream(socketPath, query, true)
   t.after(stream.dispose)
   await stream.ready
   return socketPath
@@ -211,4 +211,46 @@ test('only index warming retries; warmup deadline returns a single 503 error lin
   const failed = await request(socket, '/search?group=event&q=failed')
   assert.deepEqual(failed, { status: 500, completed: true, items: [{ error: { code: 'SESSION_QUERY_INDEX_FAILED', message: 'failed' } }] })
   assert.equal(calls, before + 1)
+})
+
+test('one warmup deadline covers every page of a search; exclusion-only queries are bad requests', async t => {
+  const timeout = AbortSignal.timeout
+  let budgets = 0
+  t.mock.method(AbortSignal, 'timeout', () => { budgets++; return timeout(80) })
+  const socket = await serve(t, {
+    async searchEvents({ query, cursor }) {
+      if (query === '-only') throw Object.assign(new Error('exclusion-only'), { code: 'SESSION_QUERY_EXCLUSION_ONLY' })
+      if (cursor === undefined) return { items: [{ sessionId: 'one', seq: 1 }], nextCursor: 'p2' }
+      throw Object.assign(new Error('warming'), { code: 'SESSION_QUERY_INDEX_WARMING' })
+    },
+  })
+  const paged = await request(socket, '/search?group=event&q=words')
+  assert.equal(paged.completed, false)
+  assert.deepEqual(paged.items.map(item => item.error?.code ?? item.seq), [1, 'SESSION_QUERY_INDEX_WARMING'])
+  assert.equal(budgets, 1)
+  assert.deepEqual(await request(socket, '/search?group=event&q=-only'), {
+    status: 400, completed: true, items: [{ error: { code: 'SESSION_QUERY_EXCLUSION_ONLY', message: 'exclusion-only' } }],
+  })
+})
+
+test('binding refuses a socket another server still accepts on and replaces a refused stale socket', async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'session-stream-'))
+  t.after(() => rm(dir, { recursive: true, force: true }))
+  const socketPath = join(dir, 's.sock')
+  const query = { async pageSessions() { return { items: [] } }, async readTitleSnapshots() { return [] } }
+  const first = await startSessionStream(socketPath, query, true)
+  t.after(first.dispose)
+  await first.ready
+  await assert.rejects(startSessionStream(socketPath, query, true), /in use by another server/)
+  assert.equal((await request(socketPath, '/sessions')).status, 200)
+
+  // A hard link keeps the socket file after its server closes, leaving a path that refuses connections.
+  const stalePath = join(dir, 'stale.sock')
+  await link(socketPath, stalePath)
+  first.dispose()
+  const second = await startSessionStream(stalePath, query, true)
+  t.after(second.dispose)
+  await second.ready
+  assert.ok((await stat(stalePath)).isSocket())
+  assert.equal((await request(stalePath, '/sessions')).status, 200)
 })
